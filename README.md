@@ -29,6 +29,11 @@ uv sync               # base + dev (CPU-only: config/stats/tests)
 uv sync --group gpu   # + torch/transformers/librosa for Qwen2-Audio
 ```
 
+The `gpu` dependency group is pinned for the current RunPod A40 target:
+`torch==2.9.1` and `torchaudio==2.9.1` are resolved from the official PyTorch
+CUDA 12.8 wheel index (`cu128`). Do not loosen this to CUDA 13 wheels unless the
+server NVIDIA driver is upgraded accordingly.
+
 On a GPU server, point caches at a persistent workspace:
 
 ```bash
