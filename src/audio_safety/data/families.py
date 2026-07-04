@@ -102,23 +102,30 @@ def render_audio_records(
                     safety_label=safety_label,
                     style=style,
                 )
+                values = {
+                    "text": text,
+                    "text_json": json.dumps(text, ensure_ascii=False),
+                    "style": style,
+                    "output": str(output),
+                    "output_path": str(output),
+                    "item_id": pair.item_id,
+                    "query_id": pair.item_id,
+                    "safety_label": safety_label,
+                    "query_type": safety_label,
+                }
+                command = (
+                    _format_command(tts_cfg.command_template, values)
+                    if tts_cfg.command_template
+                    else None
+                )
                 output.parent.mkdir(parents=True, exist_ok=True)
                 if output.exists() and not tts_cfg.overwrite:
                     status = "exists"
                 elif dry_run:
                     status = "planned"
                 else:
-                    command = _format_command(
-                        tts_cfg.command_template or "",
-                        {
-                            "text": text,
-                            "text_json": json.dumps(text, ensure_ascii=False),
-                            "style": style,
-                            "output": str(output),
-                            "item_id": pair.item_id,
-                            "safety_label": safety_label,
-                        },
-                    )
+                    if command is None:
+                        raise ValueError("dataset.tts.command_template is required")
                     subprocess.run(command, check=True, timeout=None)
                     status = "rendered"
 
@@ -136,6 +143,7 @@ def render_audio_records(
                         "style_passed": True,
                         "core_tokens_preserved": None,
                         "status": status,
+                        "command": command if dry_run else None,
                     }
                 )
 
@@ -242,9 +250,9 @@ def transcript_control_passed(audio: RenderedAudio, cfg: AudioRdoDatasetConfig) 
         return False
     if cfg.transcript_control.require_harmful_tokens and audio.core_tokens_preserved is False:
         return False
-    if cfg.transcript_control.require_style_classifier_pass and audio.style_passed is not True:
-        return False
-    return True
+    return not (
+        cfg.transcript_control.require_style_classifier_pass and audio.style_passed is not True
+    )
 
 
 def rendered_audio_from_record(record: dict[str, object], data_dir: Path) -> RenderedAudio:
@@ -256,7 +264,9 @@ def rendered_audio_from_record(record: dict[str, object], data_dir: Path) -> Ren
         transcript=str(record["transcript"]) if record.get("transcript") else None,
         wer=float(record["wer"]) if record.get("wer") is not None else None,
         duration_s=float(record["duration_s"]) if record.get("duration_s") is not None else None,
-        style_passed=bool(record["style_passed"]) if record.get("style_passed") is not None else None,
+        style_passed=bool(record["style_passed"])
+        if record.get("style_passed") is not None
+        else None,
         core_tokens_preserved=(
             bool(record["core_tokens_preserved"])
             if record.get("core_tokens_preserved") is not None

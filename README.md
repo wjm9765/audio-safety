@@ -70,12 +70,8 @@ After cloning on an A40 GPU cloud instance:
 
 ```bash
 uv sync
-uv sync --group gpu
 
-mkdir -p "$AUDIO_SAFETY_DATA_DIR/text/figstep"
-git clone https://github.com/CryptoAILab/FigStep /tmp/FigStep
-cp /tmp/FigStep/data/question/safebench.csv \
-  "$AUDIO_SAFETY_DATA_DIR/text/figstep/safebench.csv"
+export OPENROUTER_API_KEY=<your_key>
 
 ./scripts/prepare_audio_rdo_pairs.py \
   --config configs/experiments/exp1_refusal_cone_drift.yaml \
@@ -87,8 +83,11 @@ cp /tmp/FigStep/data/question/safebench.csv \
   --config configs/experiments/exp1_refusal_cone_drift.yaml \
   --dry-run
 
-# Then set dataset.tts.command_template for your CosyVoice2 install and run
-# without --dry-run.
+# The default TTS command uses scripts/cosyvoice2_tts.py. On first real render it
+# bootstraps the official CosyVoice repo, a separate uv TTS venv, and the
+# FunAudioLLM/CosyVoice2-0.5B checkpoint under AUDIO_SAFETY_CACHE_DIR.
+./scripts/render_audio_rdo.py \
+  --config configs/experiments/exp1_refusal_cone_drift.yaml
 
 ./scripts/score_transcripts.py \
   --config configs/experiments/exp1_refusal_cone_drift.yaml

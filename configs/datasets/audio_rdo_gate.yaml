@@ -38,7 +38,7 @@ pair_generation:
 
 tts:
   engine: cosyvoice2
-  command_template: null
+  command_template: "./scripts/cosyvoice2_tts.py --text-json {text_json} --style {style} --output {output_path}"
   audio_subdir: audio
   manifest_file: manifests/audio_rdo_renders.jsonl
   overwrite: false

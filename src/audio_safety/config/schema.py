@@ -84,8 +84,8 @@ class TtsConfig(StrictModel):
     """CosyVoice2 adapter.
 
     ``command_template`` is intentionally deployment-specific. It may reference
-    ``{text}``, ``{text_json}``, ``{style}``, ``{output}``, ``{item_id}``, and
-    ``{safety_label}``.
+    ``{text}``, ``{text_json}``, ``{style}``, ``{output}``/``{output_path}``,
+    ``{item_id}``/``{query_id}``, and ``{safety_label}``/``{query_type}``.
     """
 
     engine: str = "cosyvoice2"
