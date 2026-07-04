@@ -135,6 +135,8 @@ Required fields:
 
 ASR is intentionally simple for the first gate:
 
+- `dataset.asr.mode: skip`: do not run ASR; pass rendered rows through with
+  `transcript_control_skipped=true`. This is the current fast path.
 - `dataset.asr.mode: manifest`: fill `transcript` fields in the render manifest,
   then run `./scripts/score_transcripts.py`.
 - `dataset.asr.mode: command`: set `dataset.asr.command_template`; the command

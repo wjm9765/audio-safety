@@ -20,7 +20,7 @@ def test_exp1_config_loads():
     assert cfg.dataset.pair_generation.api_key_env == "OPENROUTER_API_KEY"
     assert cfg.dataset.tts.engine == "cosyvoice2"
     assert "scripts/cosyvoice2_tts.py" in str(cfg.dataset.tts.command_template)
-    assert cfg.dataset.asr.mode == "manifest"
+    assert cfg.dataset.asr.mode == "skip"
     assert cfg.dataset.transcript_control.require_style_classifier_pass is False
     assert cfg.dataset.target_generation.max_new_tokens == 64
     assert cfg.dataset.styles == [

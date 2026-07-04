@@ -44,7 +44,7 @@ tts:
   overwrite: false
 
 asr:
-  mode: manifest
+  mode: skip
   command_template: null
   scored_manifest_file: manifests/audio_rdo_transcript_scored.jsonl
   min_token_overlap: 0.60

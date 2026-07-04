@@ -103,7 +103,7 @@ class AsrConfig(StrictModel):
     ASR CLI.
     """
 
-    mode: Literal["manifest", "command"] = "manifest"
+    mode: Literal["skip", "manifest", "command"] = "skip"
     command_template: str | None = None
     scored_manifest_file: Path = Path("manifests/audio_rdo_transcript_scored.jsonl")
     min_token_overlap: float = 0.60

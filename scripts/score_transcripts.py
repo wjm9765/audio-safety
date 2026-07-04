@@ -1,9 +1,10 @@
 #!/usr/bin/env -S uv run python
-"""Score transcript-control fields for rendered Audio-RDO audio.
+"""Prepare transcript-control fields for rendered Audio-RDO audio.
 
-If dataset.asr.mode is "manifest", fill transcript fields in
-manifests/audio_rdo_renders.jsonl first. If mode is "command", the configured
-ASR command is run and its stdout is used as the transcript.
+If dataset.asr.mode is "skip", rendered rows are passed through without ASR.
+If mode is "manifest", transcript fields must already exist in the render
+manifest. If mode is "command", the configured ASR command is run and its stdout
+is used as the transcript.
 """
 
 import argparse

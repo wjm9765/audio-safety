@@ -189,6 +189,27 @@ def score_transcript_records(
     return scored
 
 
+def skip_transcript_control_records(
+    records: Iterable[dict[str, object]],
+) -> list[dict[str, object]]:
+    """Pass rendered records through when ASR validation is disabled for a run."""
+    skipped: list[dict[str, object]] = []
+    for record in records:
+        updated = dict(record)
+        updated.update(
+            {
+                "wer": None,
+                "token_overlap": None,
+                "core_tokens_preserved": None,
+                "style_passed": bool(record.get("style_passed", True)),
+                "transcript_control_passed": True,
+                "transcript_control_skipped": True,
+            }
+        )
+        skipped.append(updated)
+    return skipped
+
+
 def transcribe_records_with_command(
     records: Iterable[dict[str, object]],
     asr_cfg: AsrConfig,
@@ -233,6 +254,10 @@ def score_transcript_manifest(
     dataset_cfg: AudioRdoDatasetConfig,
 ) -> list[dict[str, object]]:
     records = load_jsonl(data_dir / dataset_cfg.tts.manifest_file)
+    if dataset_cfg.asr.mode == "skip":
+        scored = skip_transcript_control_records(records)
+        save_jsonl(scored, data_dir / dataset_cfg.asr.scored_manifest_file)
+        return scored
     if dataset_cfg.asr.mode == "command":
         records = transcribe_records_with_command(records, dataset_cfg.asr, data_dir)
     scored = score_transcript_records(records, dataset_cfg, dataset_cfg.asr)
@@ -246,6 +271,8 @@ def transcript_control_passed(audio: RenderedAudio, cfg: AudioRdoDatasetConfig) 
     Geometry analysis must only consume samples that pass this predicate. Missing
     WER/style metadata fails closed.
     """
+    if cfg.asr.mode == "skip":
+        return True
     if audio.wer is None or audio.wer > cfg.transcript_control.wer_max:
         return False
     if cfg.transcript_control.require_harmful_tokens and audio.core_tokens_preserved is False:
