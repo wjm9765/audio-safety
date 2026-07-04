@@ -1,0 +1,41 @@
+# Experiment 1: Audio-Induced Refusal-Cone Drift Probe
+# Pre-registered design: docs/experiments/exp1_refusal_cone_drift/design.md
+name: exp1_refusal_cone_drift
+seed: 0
+
+# File references, resolved by the config loader.
+model: configs/models/qwen2_audio.yaml
+paths: configs/paths/default.yaml
+
+cone:
+  # design.md §2.1 — semantically distinct harm categories
+  categories:
+    - weapons_violence
+    - fraud_finance
+    - malware_hacking
+    - privacy_doxxing
+    - hate_harassment
+    - illegal_substances
+  pairs_per_category: 256
+  # Both methods are built; agreement checked via principal angles (design.md §4.3)
+  methods: [diff_in_means, pca]
+  causal_validation: true      # keep only axes passing ablation/addition (design.md §4.4)
+
+drift:
+  # design.md §2.2 — paired content x family
+  n_contents: 150
+  families: [plain, nonspeech, style, perturbed]
+  min_valid_per_family: 100    # after comprehension filter
+  style_voice_seeds: 3         # spread speaker idiosyncrasy (design.md §3)
+  benign_control_n: 100        # XSTest borderline, plain TTS
+
+stats:
+  n_permutations: 5000
+  n_bootstrap: 1000
+  ci_alpha: 0.05
+
+# design.md §0 — PRE-REGISTERED decision thresholds. Do not change after runs begin.
+decision:
+  go_max_cosine: 0.60
+  nogo_min_cosine: 0.85
+  p_threshold: 0.05

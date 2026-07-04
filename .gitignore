@@ -216,3 +216,21 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# --- audio-safety project specific ---
+# Experiment artifacts — never commit
+outputs/*
+!outputs/README.md
+data/*
+!data/README.md
+
+# Model / dataset caches and large arrays
+cache/
+wandb/
+*.ckpt
+*.safetensors
+*.npz
+*.npy
+
+# OS
+.DS_Store

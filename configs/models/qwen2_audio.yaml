@@ -1,0 +1,6 @@
+model_id: Qwen/Qwen2-Audio-7B-Instruct
+dtype: bfloat16
+device_map: auto
+attn_implementation: sdpa
+# Verified at load time against model.config — do NOT hardcode downstream.
+# Expected roughly: 28 decoder layers, hidden_size 3584 (design.md §4.1).
