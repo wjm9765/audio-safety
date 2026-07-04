@@ -64,3 +64,43 @@ def test_generate_pair_manifest_saves_incrementally_and_resumes(monkeypatch, tmp
     resumed = generate_pair_manifest(rows, cfg, output, limit=2, show_progress=False)
     assert [pair.item_id for pair in resumed] == ["row_1", "row_2"]
     assert calls == []
+
+
+def test_generate_pair_manifest_records_failures_and_continues(monkeypatch, tmp_path):
+    rows = [
+        {
+            "item_id": "row_1",
+            "category": "cat",
+            "harmful_text": "harmful one",
+            "source": "test",
+        },
+        {
+            "item_id": "row_2",
+            "category": "cat",
+            "harmful_text": "harmful two",
+            "source": "test",
+        },
+    ]
+
+    def fake_generate(row, cfg):
+        if row["item_id"] == "row_1":
+            raise RuntimeError("provider length stop")
+        return {
+            "benign_text": "benign row_2",
+            "category": row["category"],
+            "rationale": "test",
+            "generation_model": "model",
+            "generation_mode": "prompt_json",
+        }
+
+    monkeypatch.setattr(openrouter_pairs, "generate_benign_pair", fake_generate)
+    output = tmp_path / "pairs.jsonl"
+    cfg = OpenRouterPairGenerationConfig()
+
+    pairs = generate_pair_manifest(rows, cfg, output, limit=2, show_progress=False)
+
+    assert [pair.item_id for pair in pairs] == ["row_2"]
+    assert len(output.read_text().splitlines()) == 1
+    errors = (tmp_path / "pairs.jsonl.errors.jsonl").read_text().splitlines()
+    assert len(errors) == 1
+    assert "provider length stop" in errors[0]

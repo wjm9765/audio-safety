@@ -73,7 +73,7 @@ class OpenRouterPairGenerationConfig(StrictModel):
     api_key_env: str = "OPENROUTER_API_KEY"
     model: str = "z-ai/glm-5.2"
     fallback_models: list[str] = Field(default_factory=lambda: ["poolside/laguna-xs-2.1"])
-    max_tokens: int = 256
+    max_tokens: int = 1024
     temperature: float = 0.2
     timeout_s: float = 60.0
     retries: int = 2

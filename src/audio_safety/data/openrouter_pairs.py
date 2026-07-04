@@ -217,6 +217,10 @@ def _record_to_pair(record: dict[str, Any]) -> AudioRdoPair:
     )
 
 
+def _error_manifest_path(output_path: Path) -> Path:
+    return output_path.with_name(f"{output_path.name}.errors.jsonl")
+
+
 def _progress(
     rows: list[dict[str, str]],
     *,
@@ -257,6 +261,13 @@ def generate_pair_manifest(
     completed_ids = {str(record.get("item_id")) for record in records}
     pairs = [_record_to_pair(record) for record in records]
     pending_rows = [row for row in selected if row["item_id"] not in completed_ids]
+    error_path = _error_manifest_path(output_path)
+    error_records = load_jsonl(error_path) if error_path.exists() else []
+    errors_by_id = {
+        str(record.get("item_id")): record
+        for record in error_records
+        if str(record.get("item_id")) in selected_ids
+    }
 
     for row in _progress(
         pending_rows,
@@ -264,7 +275,23 @@ def generate_pair_manifest(
         initial=len(completed_ids),
         show_progress=show_progress,
     ):
-        generated = generate_benign_pair(row, cfg)
+        try:
+            generated = generate_benign_pair(row, cfg)
+        except RuntimeError as exc:
+            errors_by_id[row["item_id"]] = {
+                "item_id": row["item_id"],
+                "category": row["category"],
+                "harmful_text": row["harmful_text"],
+                "source": row["source"],
+                "error": str(exc),
+                "needs_pair_generation_retry": True,
+            }
+            save_jsonl(errors_by_id.values(), error_path)
+            print(f"[pairs] skipped {row['item_id']}: {exc}", flush=True)
+            continue
+        if row["item_id"] in errors_by_id:
+            del errors_by_id[row["item_id"]]
+            save_jsonl(errors_by_id.values(), error_path)
         pair = AudioRdoPair(
             item_id=row["item_id"],
             category=generated["category"],

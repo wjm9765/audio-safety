@@ -30,7 +30,7 @@ pair_generation:
   model: z-ai/glm-5.2
   fallback_models:
     - poolside/laguna-xs-2.1
-  max_tokens: 256
+  max_tokens: 1024
   temperature: 0.2
   timeout_s: 60.0
   retries: 2
