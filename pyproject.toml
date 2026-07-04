@@ -1,7 +1,7 @@
 [project]
 name = "audio-safety"
 version = "0.1.0"
-description = "Probing audio-induced refusal-cone drift in audio language models"
+description = "Audio-RDO refusal-axis experiments for audio language model safety"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

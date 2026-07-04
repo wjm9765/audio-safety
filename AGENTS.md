@@ -4,7 +4,7 @@
 
 ## 프로젝트 개요
 
-Audio LLM(Qwen2-Audio)의 refusal subspace가 audio 공격 family별로 **서로 다른 축**으로 drift하는지(H1), **단일 축**으로 collapse하는지(H0)를 판정하는 mechanistic interpretability 실험 프로젝트다. 현재 실험의 사전 등록 설계는 `docs/experiments/exp1_refusal_cone_drift/design.md`에 있다.
+Audio LLM(Qwen2-Audio)의 LLM residual stream 안에 조작 가능한 **audio-conditioned refusal axis**가 존재하는지 RDO-style gradient optimization으로 먼저 검증하는 mechanistic interpretability 실험 프로젝트다. 현재 실험의 사전 등록 설계는 `docs/experiments/exp1_refusal_cone_drift/design.md`에 있다.
 
 ## 기본 원칙
 
@@ -92,8 +92,17 @@ audio_safety/
 실행 예시:
 
 ```bash
-uv run python scripts/run_experiment.py --config configs/experiments/exp1_refusal_cone_drift.yaml
+./scripts/run_experiment.py --config configs/experiments/exp1_refusal_cone_drift.yaml
 ```
+
+## 스크립트 실행 규약
+
+`scripts/*.py`는 GPU 서버와 로컬 개발 환경에서 바로 실행할 수 있어야 한다.
+
+- 모든 Python CLI 스크립트는 첫 줄에 `#!/usr/bin/env -S uv run python` shebang을 둔다.
+- 새 스크립트를 추가하거나 기존 스크립트를 CLI로 쓰게 만들면 반드시 executable bit를 설정한다 (`chmod +x scripts/<name>.py`).
+- 문서와 예시 명령은 `uv run python scripts/...` 대신 `./scripts/<name>.py ...` 형식을 우선 사용한다.
+- 복잡한 로직은 계속 `src/audio_safety/`에 두고, `scripts/`는 argument parsing과 pipeline 호출만 담당한다.
 
 ## 경로와 캐시 정책
 
@@ -174,7 +183,7 @@ export XDG_CACHE_HOME=/workspace/cache
 - 새 설정이 필요하면 config schema(`src/audio_safety/config/schema.py`)와 config 파일에 함께 추가한다.
 - 새 의존성이 필요하면 적절한 dependency group에 추가한다.
 - GPU 서버에서 `uv sync` 기반으로 재현 가능해야 한다.
-- 실행 예시는 `uv run ...` 형식으로 작성한다.
+- 실행 예시는 executable script 형식(`./scripts/<name>.py ...`)으로 작성한다.
 - `/workspace` 외부의 개인 경로나 임의 절대 경로를 문서/코드에 남기지 않는다.
 - 통계·판정 로직을 수정하면 반드시 `tests/`의 해당 테스트도 갱신하고 `uv run pytest`로 확인한다.
 

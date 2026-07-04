@@ -11,5 +11,5 @@
 
 - run naming: `exp1_{YYYYMMDD}_{HHMM}_{tag}`
 - run 산출물은 `outputs/<run_name>/`에 저장 (`outputs/README.md` 참조)
-- 판정(GO/NO-GO/AMBIGUOUS)은 `design.md` §0의 사전 등록 임계값으로만 내린다
+- 판정(GO/WEAK-GO/NO-GO/AMBIGUOUS)은 `design.md` §0의 사전 등록 임계값으로만 내린다
 - 판정 확정 전에 `/analyze-experiment` + `/codex-cross-check`를 거친다

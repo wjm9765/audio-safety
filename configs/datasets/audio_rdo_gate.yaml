@@ -1,0 +1,36 @@
+# Dataset plan for Experiment 1: Audio-RDO Refusal Axis Existence Gate.
+#
+# Primary harmful source: FigStep SafeBench. It is the closest public source to the
+# AIAH-style setup: harmful prompts are text first, then rendered into speech with a
+# controlled TTS pipeline. Raw files are stored under AUDIO_SAFETY_DATA_DIR, not git.
+harmful_source: figstep_safebench
+source_url: https://github.com/CryptoAILab/FigStep
+seed_file: text/figstep/safebench.csv
+source_file: text/figstep/audio_rdo_pairs.jsonl
+
+# 100 is the minimum gate; 150 leaves margin after transcript/style filtering.
+n_pairs: 150
+min_pairs: 100
+
+splits:
+  train: 0.40
+  validation: 0.20
+  heldout: 0.40
+
+benign_pair_strategy: lexical_overlap_safety_rewrite
+tts_engine: cosyvoice2
+
+styles:
+  - neutral
+  - sad
+  - fearful
+  - angry
+  - elderly_male
+  - child_female
+
+transcript_control:
+  wer_max: 0.05
+  require_harmful_tokens: true
+  drop_duration_outliers: true
+  duration_z_max: 3.0
+  require_style_classifier_pass: true

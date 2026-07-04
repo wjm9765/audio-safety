@@ -11,14 +11,18 @@ outputs/
   <run_name>/                   # exp1_{YYYYMMDD}_{HHMM}_{tag}
     config_snapshot.yaml        # 실행 시점 config 전체 + git commit hash
     metrics.json                # 판정 metric 포함 모든 수치
-    activations/*.npz           # layer별 hidden states (조건별)
-    projections.npz             # (n_contents, n_families, k) drift projections
-    figures/                    # fig1_layer_sweep, fig2_profiles, fig3_separation ...
+    behavior_table.json         # 4-way behavior decomposition
+    selected_site.json          # validation-selected (layer, position)
+    rdo_axis.npz                # learned r_A and metadata
+    baseline_vectors.npz        # MDSteer-c2r, SARSteer-text, random controls
+    activations/*.npz           # condition/site hidden states
+    figures/                    # behavior, axis validation, escape/restoration
     analysis.md                 # /analyze-experiment 산출물
   cross_checks/
     YYYYMMDD_<topic>.md         # /codex-cross-check 리포트
 ```
 
-`metrics.json`에는 최소한 다음을 포함한다: family별 유효 n·comprehension 통과율,
-mean pairwise cosine, permutation p, bootstrap CI, dominant axes, 축별 ablation
-refusal-rate 하락, classifier macro-F1, 판정 결과(status + reasons).
+`metrics.json`에는 최소한 다음을 포함한다: transcript/style control 통과율,
+decoding_failure 비율, addition RR delta, benign ORR delta, ablation ASR delta,
+matched-ORR baseline 비교, Escape Spearman/AUROC, restoration RR delta,
+restored fraction, bootstrap CI, 판정 결과(status + reasons).

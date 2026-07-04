@@ -1,10 +1,11 @@
+#!/usr/bin/env -S uv run python
 """CLI entry point for experiment runs. Thin by design (AGENTS.md): parses args,
 resolves config/paths/seed, snapshots reproducibility info, dispatches to pipelines.
 
 Example:
-    uv run python scripts/run_experiment.py \
+    ./scripts/run_experiment.py \
         --config configs/experiments/exp1_refusal_cone_drift.yaml \
-        --run-name exp1_20260704_1200_probe \
+        --run-name exp1_20260704_1200_audio_rdo_gate \
         --override stats.n_permutations=1000
 """
 
@@ -17,7 +18,16 @@ from audio_safety.utils.io import snapshot_config
 from audio_safety.utils.paths import resolve_paths, run_output_dir
 from audio_safety.utils.seed import set_seed
 
-STAGES = ("data", "cone", "drift", "stats", "all")
+STAGES = (
+    "data",
+    "behavior",
+    "rdo",
+    "baselines",
+    "style_escape",
+    "restoration",
+    "stats",
+    "all",
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -49,13 +59,16 @@ def main() -> None:
     print(f"[run] {run_name}")
     print(f"[run] config snapshot -> {run_dir / 'config_snapshot.yaml'}")
 
-    # Stage dispatch. Stages fill in as pipelines land (design.md §8 schedule):
-    #   data  -> data.datasets / data.families rendering + comprehension filter
-    #   cone  -> pipelines.extract (layer sweep) + pipelines.cone + causal ablation
-    #   drift -> paired drift extraction + pipelines.drift.project_drifts
-    #   stats -> evaluation.stats + evaluation.decision on saved projections
+    # Stage dispatch. Stages fill in as GPU/server scripts land (design.md §6):
+    #   data          -> harmful/benign pair manifest + CosyVoice2 render manifest
+    #   behavior      -> 4-way output labels, decoding-failure accounting
+    #   rdo           -> layer/position sweep + Audio-RDO axis optimization
+    #   baselines     -> MDSteer-c2r, SARSteer-style text vector, random controls
+    #   style_escape  -> benign-controlled occupancy/escape analysis
+    #   restoration   -> axis-coordinate restoration intervention
+    #   stats         -> gate decision + bootstrap CIs
     raise NotImplementedError(
-        f"stage {args.stage!r} not wired yet — implement per design.md §7 skeleton"
+        f"stage {args.stage!r} not wired yet — implement per design.md §6 skeleton"
     )
 
 

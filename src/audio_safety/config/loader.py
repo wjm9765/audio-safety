@@ -11,6 +11,7 @@ repo root / CWD, falling back to the referencing file's directory)::
 
     model: configs/models/qwen2_audio.yaml
     paths: configs/paths/default.yaml
+    dataset: configs/datasets/audio_rdo_gate.yaml
 """
 
 from pathlib import Path
@@ -21,7 +22,7 @@ import yaml
 from audio_safety.config.schema import ExperimentConfig
 
 # Top-level keys whose string value is treated as a path to another YAML file.
-_FILE_REF_KEYS = ("model", "paths")
+_FILE_REF_KEYS = ("model", "paths", "dataset")
 
 
 def load_yaml(path: Path | str) -> dict[str, Any]:

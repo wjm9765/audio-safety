@@ -1,37 +1,121 @@
 # data/
 
-원본 데이터는 git에 커밋하지 않는다. 실제 데이터는 `$AUDIO_SAFETY_DATA_DIR`
-(기본: `/workspace/audio_safety/data`)에 두고, 이 디렉터리에는 설명과 준비 스크립트 산출 메타데이터만 둔다.
+Raw data is not committed. Store actual files under `$AUDIO_SAFETY_DATA_DIR`
+(default: `/workspace/audio_safety/data`). This repository directory only records
+dataset choices and manifest contracts.
 
-## 필요한 데이터 (design.md §2)
+## Selected Initial Dataset
 
-### Cone 구성용 (text)
+Primary harmful text seed:
 
-| Source | 용도 | 비고 |
+| Source | URL | Why |
 |---|---|---|
-| AdvBench / HarmBench / SORRY-Bench | 카테고리 라벨 있는 harmful text | 6개 harm 카테고리, 카테고리당 256–512쌍 |
-| XSTest | borderline-safe benign | over-refusal 경계 — refusal 축(주제 탐지 아님)을 잡기 위해 필수 |
-| Alpaca / just-eval | 일반 benign | 주제 분포를 harmful과 매칭 |
+| FigStep SafeBench | `https://github.com/CryptoAILab/FigStep` | Public harmful-question source used in the same lineage as audio safety red-teaming work; easy to render into speech with controlled TTS. |
 
-### Drift probe용 (audio)
+Expected seed file after acquisition:
 
-| Family | 렌더링 | 비고 |
-|---|---|---|
-| plain | 표준 TTS (또는 `WeifeiJin/AdvBench-Audio` 재사용) | |
-| nonspeech | plain + 환경음 prepend/append/mix | |
-| style | emotion/accent/age/gender/rate 변형 | voice seed ≥3개로 분산 |
-| perturbed | AJailBench Audio Perturbation Toolkit | AdvWave식 gradient 최적화는 exp1 제외 |
-
-## 디렉터리 규약 (workspace 하위)
-
+```text
+$AUDIO_SAFETY_DATA_DIR/text/figstep/safebench.csv
 ```
+
+Do **not** run geometry on this harmful-only CSV. First create a curated harmful-benign pair manifest:
+
+```text
+$AUDIO_SAFETY_DATA_DIR/text/figstep/audio_rdo_pairs.jsonl
+```
+
+Required JSONL fields:
+
+```json
+{"item_id":"...","category":"...","harmful_text":"...","benign_text":"...","source":"figstep_safebench"}
+```
+
+Pairing rule:
+
+- keep lexical overlap high;
+- change only the unsafe intent into safe handling, prevention, reporting, historical discussion, or high-level explanation;
+- avoid adding jailbreak phrasing or style instructions;
+- manually spot-check pairs before rendering.
+
+## Audio Rendering
+
+TTS engine:
+
+```text
+CosyVoice2
+```
+
+Initial styles:
+
+```text
+neutral
+sad
+fearful
+angry
+elderly_male
+child_female
+```
+
+Expected render tree:
+
+```text
 $AUDIO_SAFETY_DATA_DIR/
-  text/
-    harmful/<category>.jsonl
-    benign/{xstest,alpaca}.jsonl
   audio/
-    <family>/<content_id>[_seed<k>].wav
-  manifests/
-    drift_contents.jsonl        # 선정된 150개 내용 + 카테고리
-    comprehension_results.jsonl # 전사 필터 결과 (통과/탈락 + 사유)
+    harmful/
+      neutral/<item_id>.wav
+      sad/<item_id>.wav
+      fearful/<item_id>.wav
+      angry/<item_id>.wav
+      elderly_male/<item_id>.wav
+      child_female/<item_id>.wav
+    benign/
+      neutral/<item_id>.wav
+      sad/<item_id>.wav
+      fearful/<item_id>.wav
+      angry/<item_id>.wav
+      elderly_male/<item_id>.wav
+      child_female/<item_id>.wav
 ```
+
+## Transcript and Style Control
+
+Each rendered audio must have a manifest row:
+
+```text
+$AUDIO_SAFETY_DATA_DIR/manifests/audio_rdo_renders.jsonl
+```
+
+Required fields:
+
+```json
+{
+  "item_id": "...",
+  "safety_label": "harmful",
+  "style": "neutral",
+  "path": "audio/harmful/neutral/....wav",
+  "transcript": "...",
+  "wer": 0.0,
+  "duration_s": 0.0,
+  "core_tokens_preserved": true,
+  "style_passed": true
+}
+```
+
+Geometry analysis may only use rows satisfying:
+
+```text
+WER <= 5%
+core_tokens_preserved == true
+style_passed == true
+duration not an outlier
+```
+
+## Optional Follow-up Sources
+
+Only use these after the first gate if FigStep/SafeBench lacks enough valid pairs:
+
+| Source | Role |
+|---|---|
+| HarmBench behaviors | broader harmful behavior taxonomy for robustness |
+| Do-Not-Answer | refusal-oriented prompts for auxiliary validation |
+| XSTest | borderline benign prompts to stress over-refusal |

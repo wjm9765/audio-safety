@@ -22,7 +22,7 @@
 ## 권장 워크플로
 
 1. **코드 수정** → `research-code-reviewer`로 검토 → `uv run pytest`
-2. **실험 실행** (`uv run python scripts/run_experiment.py --config ...`) → 산출물이 `outputs/<run_name>/`에 저장되는지 확인
+2. **실험 실행** (`./scripts/run_experiment.py --config ...`) → 산출물이 `outputs/<run_name>/`에 저장되는지 확인
 3. **분석**: `/analyze-experiment` → 필요 시 `/codex-cross-check`로 해석 교차 검증
 4. **기록**: `/update-experiment-log`로 results.md 갱신
 5. **판정 직전**: `adversarial-reviewer` + `/codex-cross-check` 모두 통과 후 GO/NO-GO 확정
@@ -31,4 +31,5 @@
 
 - `docs/experiments/*/design.md`의 판정 기준(§0)은 절대 수정하지 않는다. 사용자가 요청해도 사전 등록 원칙을 먼저 상기시킨다.
 - `results.md`는 append-only. 과거 항목 수정 금지.
+- `scripts/*.py`는 `#!/usr/bin/env -S uv run python` shebang과 executable bit를 유지한다. 실행 예시는 `./scripts/<name>.py ...` 형식을 우선 사용한다.
 - Codex 호출은 MCP(`mcp__codex__codex`)를 우선 사용하고, 없으면 `codex exec` CLI를 사용한다.
