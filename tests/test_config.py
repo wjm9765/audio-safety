@@ -16,6 +16,12 @@ def test_exp1_config_loads():
     assert cfg.dataset.harmful_source == "figstep_safebench"
     assert str(cfg.dataset.seed_file) == "text/figstep/safebench.csv"
     assert str(cfg.dataset.source_file) == "text/figstep/audio_rdo_pairs.jsonl"
+    assert cfg.dataset.pair_generation.model == "z-ai/glm-5.2"
+    assert cfg.dataset.pair_generation.api_key_env == "OPENROUTER_API_KEY"
+    assert cfg.dataset.tts.engine == "cosyvoice2"
+    assert cfg.dataset.asr.mode == "manifest"
+    assert cfg.dataset.transcript_control.require_style_classifier_pass is False
+    assert cfg.dataset.target_generation.max_new_tokens == 64
     assert cfg.dataset.styles == [
         "neutral",
         "sad",

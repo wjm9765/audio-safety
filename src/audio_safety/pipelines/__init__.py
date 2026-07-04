@@ -21,8 +21,20 @@ from audio_safety.pipelines.cone import (
 )
 from audio_safety.pipelines.drift import drift_vectors, project_drifts
 from audio_safety.pipelines.extract import extract_site_activations
+from audio_safety.pipelines.rdo_gate import (
+    Site,
+    compute_style_escape_metrics,
+    extract_selected_site_activations,
+    finalize_gate_metrics,
+    load_axis,
+    load_selected_site,
+    save_axis,
+    save_selected_site,
+    split_ids,
+)
 
 __all__ = [
+    "Site",
     "behavior_counts",
     "benign_controlled_safety_shift",
     "coordinate_restore",
@@ -31,8 +43,13 @@ __all__ = [
     "drift_vectors",
     "escape_scores",
     "extract_site_activations",
+    "compute_style_escape_metrics",
+    "extract_selected_site_activations",
+    "finalize_gate_metrics",
     "gram_schmidt",
     "harmful_compliance_rate",
+    "load_axis",
+    "load_selected_site",
     "pca_directions",
     "principal_angles",
     "projection_ablate",
@@ -40,7 +57,10 @@ __all__ = [
     "project_onto_cone",
     "refusal_rate",
     "sar_text_refusal_vector",
+    "save_axis",
+    "save_selected_site",
     "signed_occupancy",
+    "split_ids",
     "train_audio_rdo_axis",
     "unit_vector",
 ]

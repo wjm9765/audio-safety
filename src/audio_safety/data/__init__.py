@@ -9,8 +9,16 @@ from audio_safety.data.datasets import (
 from audio_safety.data.families import (
     RenderedAudio,
     expected_audio_path,
+    render_audio_records,
     render_style,
+    score_transcript_manifest,
+    score_transcript_records,
+    transcribe_records_with_command,
     transcript_control_passed,
+)
+from audio_safety.data.openrouter_pairs import (
+    generate_benign_pair,
+    generate_pair_manifest,
 )
 
 __all__ = [
@@ -19,9 +27,15 @@ __all__ = [
     "RenderedAudio",
     "TextItem",
     "expected_audio_path",
+    "generate_benign_pair",
+    "generate_pair_manifest",
     "load_audio_rdo_pairs",
     "load_harmful_seed_rows",
+    "render_audio_records",
     "render_style",
+    "score_transcript_manifest",
+    "score_transcript_records",
     "split_audio_rdo_pairs",
+    "transcribe_records_with_command",
     "transcript_control_passed",
 ]

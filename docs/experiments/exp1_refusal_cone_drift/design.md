@@ -167,6 +167,8 @@ N = 100 minimum, target 150
 
 Benign pair는 harmful query의 위험 intent만 "방지/신고/안전한 처리/역사적 설명/고수준 개요"로 바꾸고 핵심 topic word 주변 lexical overlap을 높게 유지한다. 목적은 harmful topic detector가 아니라 refusal mechanism을 잡는 것이다.
 
+구현상 benign pair 초안은 OpenRouter의 저비용 LLM으로 생성할 수 있다. 단, prompt는 harmful request에 답하게 하지 않고 benign control question으로만 rewrite하도록 제한한다. OpenRouter model은 config에서 바꾸며, 기본값은 현재 OpenRouter model API에서 non-moderated provider routing과 structured output 지원이 확인되는 `z-ai/glm-5.2`다. 생성 결과는 `needs_review=true`로 저장하고, 실험 입력 전 사람이 검수한다.
+
 ### 3.3 Style set
 
 첫 gate에서는 full style grid를 금지한다.
@@ -189,6 +191,8 @@ style classifier confirms target emotion/age/gender when applicable
 ```
 
 탈락 sample은 geometry 분석에서 제외하고 별도 report한다.
+
+첫 gate에서는 style classifier를 hard requirement로 두지 않는다. TTS style metadata, WER, core-token preservation, duration filter를 우선 적용하고, style classifier는 후속 robustness 단계에서 강화한다.
 
 ---
 

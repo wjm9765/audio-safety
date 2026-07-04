@@ -37,6 +37,20 @@ Pairing rule:
 - avoid adding jailbreak phrasing or style instructions;
 - manually spot-check pairs before rendering.
 
+Draft pair generation:
+
+```bash
+export OPENROUTER_API_KEY=<your_key>
+
+./scripts/prepare_audio_rdo_pairs.py \
+  --config configs/experiments/exp1_refusal_cone_drift.yaml \
+  --limit 150
+```
+
+The OpenRouter prompt only asks for a benign control rewrite and explicitly
+forbids harmful answers, steps, code, materials, or operational details. Generated
+rows are marked `needs_review` by default.
+
 ## Audio Rendering
 
 TTS engine:
@@ -44,6 +58,24 @@ TTS engine:
 ```text
 CosyVoice2
 ```
+
+The repository provides a command-template adapter instead of hardcoding a
+CosyVoice2 installation. Set `dataset.tts.command_template` by config override or
+YAML edit. The template may use:
+
+```text
+{text} {text_json} {style} {output} {item_id} {safety_label}
+```
+
+Example shape:
+
+```bash
+./scripts/render_audio_rdo.py \
+  --config configs/experiments/exp1_refusal_cone_drift.yaml \
+  --dry-run
+```
+
+Remove `--dry-run` only after the command template works on the GPU machine.
 
 Initial styles:
 
@@ -101,12 +133,20 @@ Required fields:
 }
 ```
 
+ASR is intentionally simple for the first gate:
+
+- `dataset.asr.mode: manifest`: fill `transcript` fields in the render manifest,
+  then run `./scripts/score_transcripts.py`.
+- `dataset.asr.mode: command`: set `dataset.asr.command_template`; the command
+  must print a transcript to stdout. The template may use `{audio}`, `{path}`,
+  `{item_id}`, `{style}`, and `{safety_label}`.
+
 Geometry analysis may only use rows satisfying:
 
 ```text
 WER <= 5%
 core_tokens_preserved == true
-style_passed == true
+style_passed == true when style classifier is required
 duration not an outlier
 ```
 

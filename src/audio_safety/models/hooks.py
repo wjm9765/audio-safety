@@ -142,11 +142,17 @@ class ResidualStreamIntervention:
         import torch
 
         hidden = output[0] if isinstance(output, tuple) else output
+        token_index = self._token_index
+        if token_index < 0:
+            token_index = hidden.shape[1] + token_index
+        if token_index < 0 or token_index >= hidden.shape[1]:
+            return output
+
         vector = self._vector.to(device=hidden.device, dtype=hidden.dtype)
         vector = vector / torch.clamp(torch.linalg.vector_norm(vector), min=self._eps)
 
         edited = hidden.clone()
-        current = edited[:, self._token_index, :]
+        current = edited[:, token_index, :]
 
         if self._mode == "add":
             replacement = current + self._scale * vector
@@ -172,7 +178,7 @@ class ResidualStreamIntervention:
             coord = current @ vector
             replacement = current + (target - coord).unsqueeze(-1) * vector
 
-        edited[:, self._token_index, :] = replacement
+        edited[:, token_index, :] = replacement
         return _replace_hidden_output(output, edited)
 
     def __enter__(self) -> "ResidualStreamIntervention":

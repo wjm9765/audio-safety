@@ -165,9 +165,12 @@ class RdoTrainingBatch:
 
     add_inputs: Mapping[str, Any]
     add_labels: Any
+    add_token_index: int
     ablate_inputs: Mapping[str, Any] | None = None
     ablate_labels: Any | None = None
+    ablate_token_index: int | None = None
     retain_inputs: Mapping[str, Any] | None = None
+    retain_token_index: int | None = None
 
 
 def make_continuation_labels(input_ids: Any, prompt_length: int, ignore_index: int = -100) -> Any:
@@ -213,7 +216,6 @@ def train_audio_rdo_axis(
     batches: Sequence[RdoTrainingBatch],
     *,
     layer_idx: int,
-    token_index: int,
     cfg: AudioRdoConfig,
 ) -> np.ndarray:
     """Optimize one audio-conditioned refusal axis at a fixed layer/position.
@@ -243,7 +245,7 @@ def train_audio_rdo_axis(
             with ResidualStreamIntervention(
                 model,
                 layer_idx=layer_idx,
-                token_index=token_index,
+                token_index=batch.add_token_index,
                 vector=r_unit,
                 mode="add",
                 scale=cfg.alpha,
@@ -251,25 +253,29 @@ def train_audio_rdo_axis(
                 add_loss = model(**add_inputs).loss
             total = total + cfg.loss_weights.add * add_loss
 
-            if batch.ablate_inputs is not None and batch.ablate_labels is not None:
+            if (
+                batch.ablate_inputs is not None
+                and batch.ablate_labels is not None
+                and batch.ablate_token_index is not None
+            ):
                 ablate_inputs = _with_labels(batch.ablate_inputs, batch.ablate_labels)
                 with ResidualStreamIntervention(
                     model,
                     layer_idx=layer_idx,
-                    token_index=token_index,
+                    token_index=batch.ablate_token_index,
                     vector=r_unit,
                     mode="ablate",
                 ):
                     ablate_loss = model(**ablate_inputs).loss
                 total = total + cfg.loss_weights.ablate * ablate_loss
 
-            if batch.retain_inputs is not None:
+            if batch.retain_inputs is not None and batch.retain_token_index is not None:
                 with torch.no_grad():
                     base_logits = model(**batch.retain_inputs).logits
                 with ResidualStreamIntervention(
                     model,
                     layer_idx=layer_idx,
-                    token_index=token_index,
+                    token_index=batch.retain_token_index,
                     vector=r_unit,
                     mode="add",
                     scale=cfg.alpha,

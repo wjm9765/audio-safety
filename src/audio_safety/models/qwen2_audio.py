@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 from urllib.request import urlopen
 
 from audio_safety.config.schema import ModelConfig
+from audio_safety.models.hooks import ResidualStreamIntervention
 
 _DTYPES = {"bfloat16", "float16", "float32"}
 PositionName = str
@@ -166,6 +167,43 @@ def prepare_qwen2_audio_inputs(
     return move_inputs_to_device(inputs, device) if device is not None else inputs
 
 
+def _audio_prompt_text(
+    processor: Any,
+    conversation: Sequence[Mapping[str, Any]],
+    *,
+    add_generation_prompt: bool,
+) -> str:
+    return processor.apply_chat_template(
+        list(conversation),
+        add_generation_prompt=add_generation_prompt,
+        tokenize=False,
+    )
+
+
+def prepare_qwen2_audio_teacher_forced_inputs(
+    processor: Any,
+    conversation: Sequence[Mapping[str, Any]],
+    target: str,
+    *,
+    device: Any | None = None,
+    ignore_index: int = -100,
+) -> tuple[Any, Any, int]:
+    """Prepare prompt+target inputs and CE labels for target tokens only."""
+    prompt_text = _audio_prompt_text(processor, conversation, add_generation_prompt=True)
+    full_text = prompt_text + target
+    sample_rate = processor.feature_extractor.sampling_rate
+    audios = [load_audio_array(ref, sample_rate) for ref in _audio_refs(conversation)]
+    prompt_inputs = processor(text=prompt_text, audios=audios, return_tensors="pt", padding=True)
+    full_inputs = processor(text=full_text, audios=audios, return_tensors="pt", padding=True)
+    prompt_len = prompt_inputs.input_ids.shape[1]
+    labels = full_inputs.input_ids.clone()
+    labels[:, :prompt_len] = ignore_index
+    if device is not None:
+        full_inputs = move_inputs_to_device(full_inputs, device)
+        labels = labels.to(device)
+    return full_inputs, labels, prompt_len
+
+
 def prepare_qwen2_text_inputs(
     processor: Any,
     conversation: Sequence[Mapping[str, Any]],
@@ -212,6 +250,43 @@ def resolve_chat_position_indices(
     }
 
 
+def resolve_audio_position_indices(
+    processor: Any,
+    conversation: Sequence[Mapping[str, Any]],
+) -> dict[PositionName, int]:
+    """Resolve readout positions using processor-expanded audio prompt lengths."""
+    sample_rate = processor.feature_extractor.sampling_rate
+    audios = [load_audio_array(ref, sample_rate) for ref in _audio_refs(conversation)]
+    no_generation = _audio_prompt_text(
+        processor,
+        conversation,
+        add_generation_prompt=False,
+    )
+    with_generation = _audio_prompt_text(
+        processor,
+        conversation,
+        add_generation_prompt=True,
+    )
+    no_gen_len = processor(
+        text=no_generation,
+        audios=audios,
+        return_tensors="pt",
+        padding=True,
+    ).input_ids.shape[1]
+    gen_len = processor(
+        text=with_generation,
+        audios=audios,
+        return_tensors="pt",
+        padding=True,
+    ).input_ids.shape[1]
+    if no_gen_len < 1 or gen_len < no_gen_len:
+        raise ValueError("unexpected Qwen2-Audio prompt token lengths")
+    return {
+        "assistant_start_pre": no_gen_len - 1,
+        "first_generation_prelogit": gen_len - 1,
+    }
+
+
 def generate_audio_response(
     model: Any,
     processor: Any,
@@ -231,6 +306,48 @@ def generate_audio_response(
     inputs = prepare_qwen2_audio_inputs(processor, conversation, device=device)
     prompt_len = inputs.input_ids.shape[1]
     generate_ids = model.generate(**inputs, max_new_tokens=max_new_tokens)
+    generate_ids = generate_ids[:, prompt_len:]
+    return processor.batch_decode(
+        generate_ids,
+        skip_special_tokens=True,
+        clean_up_tokenization_spaces=False,
+    )[0]
+
+
+def generate_audio_response_with_intervention(
+    model: Any,
+    processor: Any,
+    audio_path: Path | str,
+    instruction: str,
+    *,
+    layer_idx: int,
+    position_name: str,
+    vector: Any,
+    mode: str,
+    scale: float = 1.0,
+    target_coordinate: float | Any | None = None,
+    max_new_tokens: int = 128,
+    system_prompt: str = "You are a helpful assistant.",
+) -> str:
+    conversation = build_audio_analysis_conversation(
+        audio_path,
+        instruction,
+        system_prompt=system_prompt,
+    )
+    token_index = resolve_audio_position_indices(processor, conversation)[position_name]
+    device = model_input_device(model)
+    inputs = prepare_qwen2_audio_inputs(processor, conversation, device=device)
+    prompt_len = inputs.input_ids.shape[1]
+    with ResidualStreamIntervention(
+        model,
+        layer_idx=layer_idx,
+        token_index=token_index,
+        vector=vector,
+        mode=mode,
+        scale=scale,
+        target_coordinate=target_coordinate,
+    ):
+        generate_ids = model.generate(**inputs, max_new_tokens=max_new_tokens)
     generate_ids = generate_ids[:, prompt_len:]
     return processor.batch_decode(
         generate_ids,

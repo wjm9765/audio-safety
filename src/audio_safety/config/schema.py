@@ -58,7 +58,63 @@ class TranscriptControlConfig(StrictModel):
     require_harmful_tokens: bool = True
     drop_duration_outliers: bool = True
     duration_z_max: float = 3.0
-    require_style_classifier_pass: bool = True
+    require_style_classifier_pass: bool = False
+
+
+class OpenRouterPairGenerationConfig(StrictModel):
+    """Benign-control pair generation through OpenRouter.
+
+    The prompt is constrained to produce only safe benign counterparts, not
+    harmful answers. API keys are read from the environment, never config files.
+    """
+
+    enabled: bool = True
+    endpoint: str = "https://openrouter.ai/api/v1/chat/completions"
+    api_key_env: str = "OPENROUTER_API_KEY"
+    model: str = "z-ai/glm-5.2"
+    fallback_models: list[str] = Field(default_factory=lambda: ["poolside/laguna-xs-2.1"])
+    max_tokens: int = 256
+    temperature: float = 0.2
+    timeout_s: float = 60.0
+    retries: int = 2
+    review_required: bool = True
+
+
+class TtsConfig(StrictModel):
+    """CosyVoice2 adapter.
+
+    ``command_template`` is intentionally deployment-specific. It may reference
+    ``{text}``, ``{text_json}``, ``{style}``, ``{output}``, ``{item_id}``, and
+    ``{safety_label}``.
+    """
+
+    engine: str = "cosyvoice2"
+    command_template: str | None = None
+    audio_subdir: Path = Path("audio")
+    manifest_file: Path = Path("manifests/audio_rdo_renders.jsonl")
+    overwrite: bool = False
+
+
+class AsrConfig(StrictModel):
+    """Simple transcript-control adapter.
+
+    The easiest path is to fill transcript fields in the render manifest and run
+    WER scoring locally. ``command_template`` is optional for cloud setups with an
+    ASR CLI.
+    """
+
+    mode: Literal["manifest", "command"] = "manifest"
+    command_template: str | None = None
+    scored_manifest_file: Path = Path("manifests/audio_rdo_transcript_scored.jsonl")
+    min_token_overlap: float = 0.60
+
+
+class TargetGenerationConfig(StrictModel):
+    """Qwen2-Audio output generation for behavior labeling."""
+
+    instruction: str = "Please answer the question in the audio."
+    max_new_tokens: int = 64
+    outputs_file: Path = Path("manifests/audio_rdo_outputs.jsonl")
 
 
 class AudioRdoDatasetConfig(StrictModel):
@@ -77,6 +133,12 @@ class AudioRdoDatasetConfig(StrictModel):
     splits: DataSplitConfig = Field(default_factory=DataSplitConfig)
     benign_pair_strategy: str = "lexical_overlap_safety_rewrite"
     tts_engine: str = "cosyvoice2"
+    pair_generation: OpenRouterPairGenerationConfig = Field(
+        default_factory=OpenRouterPairGenerationConfig
+    )
+    tts: TtsConfig = Field(default_factory=TtsConfig)
+    asr: AsrConfig = Field(default_factory=AsrConfig)
+    target_generation: TargetGenerationConfig = Field(default_factory=TargetGenerationConfig)
     styles: list[str] = Field(
         default_factory=lambda: [
             "neutral",
@@ -117,6 +179,14 @@ class AudioRdoConfig(StrictModel):
     refusal_target: str = "I'm sorry, I can't assist with that."
     nonrefusal_prefix: str = "Here is a high-level overview:"
     loss_weights: RdoLossWeightsConfig = Field(default_factory=RdoLossWeightsConfig)
+    selected_site_file: Path = Path("selected_site.json")
+    axis_file: Path = Path("rdo_axis.npz")
+    validation_metrics_file: Path = Path("rdo_validation_metrics.json")
+    baseline_vectors_file: Path = Path("baseline_vectors.npz")
+    activations_file: Path = Path("activations/audio_rdo_selected_site.npz")
+    activation_metadata_file: Path = Path("activations/audio_rdo_selected_site.jsonl")
+    intervention_outputs_file: Path = Path("intervention_outputs.jsonl")
+    metrics_file: Path = Path("metrics.json")
 
 
 class BaselineConfig(StrictModel):

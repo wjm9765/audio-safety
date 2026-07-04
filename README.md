@@ -33,11 +33,15 @@ On a GPU server, point caches at a persistent workspace:
 
 ```bash
 export AUDIO_SAFETY_WORKSPACE=/workspace/audio_safety
+export AUDIO_SAFETY_DATA_DIR=/workspace/audio_safety/data
+export AUDIO_SAFETY_OUTPUT_DIR=/workspace/audio_safety/outputs
+export AUDIO_SAFETY_CACHE_DIR=/workspace/audio_safety/cache
 export HF_HOME=/workspace/cache/huggingface
 export HF_HUB_CACHE=/workspace/cache/huggingface/hub
 export HF_DATASETS_CACHE=/workspace/cache/huggingface/datasets
 export TORCH_HOME=/workspace/cache/torch
 export XDG_CACHE_HOME=/workspace/cache
+export OPENROUTER_API_KEY=<your_key>
 ```
 
 ## Qwen2-Audio
@@ -55,21 +59,65 @@ The project follows the official Qwen/Hugging Face inference path:
   --instruction "Please answer the question in the audio."
 ```
 
-## Run Skeleton
+## Stage Order
 
-The top-level experiment CLI snapshots config and creates run directories. Stage implementations are intentionally explicit and GPU-server oriented.
+After cloning on an A40 GPU cloud instance:
 
 ```bash
-./scripts/run_experiment.py \
+uv sync
+uv sync --group gpu
+
+mkdir -p "$AUDIO_SAFETY_DATA_DIR/text/figstep"
+git clone https://github.com/CryptoAILab/FigStep /tmp/FigStep
+cp /tmp/FigStep/data/question/safebench.csv \
+  "$AUDIO_SAFETY_DATA_DIR/text/figstep/safebench.csv"
+
+./scripts/prepare_audio_rdo_pairs.py \
   --config configs/experiments/exp1_refusal_cone_drift.yaml \
-  --run-name exp1_$(date +%Y%m%d_%H%M)_audio_rdo_gate
+  --limit 150
+
+# Review/edit $AUDIO_SAFETY_DATA_DIR/text/figstep/audio_rdo_pairs.jsonl.
+
+./scripts/render_audio_rdo.py \
+  --config configs/experiments/exp1_refusal_cone_drift.yaml \
+  --dry-run
+
+# Then set dataset.tts.command_template for your CosyVoice2 install and run
+# without --dry-run.
+
+./scripts/score_transcripts.py \
+  --config configs/experiments/exp1_refusal_cone_drift.yaml
+
+./scripts/download_qwen2_audio.py \
+  --config configs/experiments/exp1_refusal_cone_drift.yaml
+
+./scripts/generate_behavior.py \
+  --config configs/experiments/exp1_refusal_cone_drift.yaml
+
+RUN_NAME=exp1_$(date +%Y%m%d_%H%M)_audio_rdo_gate
+
+./scripts/train_rdo_axis.py \
+  --config configs/experiments/exp1_refusal_cone_drift.yaml \
+  --run-name "$RUN_NAME"
+
+./scripts/extract_rdo_activations.py \
+  --config configs/experiments/exp1_refusal_cone_drift.yaml \
+  --run-name "$RUN_NAME"
+
+./scripts/evaluate_rdo_gate.py \
+  --config configs/experiments/exp1_refusal_cone_drift.yaml \
+  --run-name "$RUN_NAME"
 ```
 
-Stages:
+The top-level runner supports the same stages, but long GPU jobs are easier to
+resume with the dedicated scripts above:
 
 ```text
-data, behavior, rdo, baselines, style_escape, restoration, stats, all
+pairs, render_audio, score_transcripts, behavior, rdo, baselines,
+extract_activations, style_escape, restoration, stats
 ```
+
+`all` is intentionally not wired; run stages explicitly so failures are resumable.
 
 ## Layout
 
