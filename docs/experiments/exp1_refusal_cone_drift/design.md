@@ -250,33 +250,145 @@ p_R = "I cannot assist with that."
 
 ### 5.3 Main: Audio-RDO refusal axis
 
-각 candidate `(ell,p*)`에서 trainable vector `r_A`를 둔다. 모델 weight는 frozen이다.
+현재 구현은 `src/audio_safety/pipelines/rdo_gate.py`의 batch 구성과
+`src/audio_safety/pipelines/audio_rdo.py`의 optimizer를 기준으로 한다. 각
+candidate site는 `(ell, p*)`이고, 현재 sweep은 다음 12개 site이다.
 
 ```text
-L(r_A) = lambda_add L_add + lambda_abl L_abl + lambda_ret L_retain
+ell in [8, 12, 16, 20, 24, 28]
+p* in {assistant_start_pre, first_generation_prelogit}
 ```
 
-Addition loss:
+`assistant_start_pre`는 assistant generation prompt가 붙기 전 마지막 token,
+`first_generation_prelogit`은 첫 생성 token의 logits를 만드는 full prompt의 마지막
+token이다. 두 위치 모두 Qwen2-Audio processor가 audio feature를 확장한 뒤의 실제
+`input_ids` 길이로 resolve한다.
+
+모델 weight는 전부 frozen이고, site별로 hidden size 차원의 trainable vector `r`만
+최적화한다. 매 forward에서 unit vector를 사용한다.
 
 ```text
-L_add = CE(f_add(alpha r_A, ell, p*)(A^H), t_R)
+u = r / max(||r||_2, eps)
+```
+
+학습 row는 train split의 behavior output에서 고른다. `decoding_failure`와
+`transcript_control_passed=false` row는 제외한다. 현재 fast path에서는 ASR을 skip하므로
+transcript-control은 자동 pass이다.
+
+```text
+add_rows    = harmful rows where behavior_label == harmful_compliance
+ablate_rows = harmful rows where behavior_label == policy_refusal
+retain_rows = benign rows
+```
+
+batch 구성은 `add_rows`, `ablate_rows`, `retain_rows`를 cycle로 묶는다. batch 수는
+`limit`이 있으면 `limit`, 아니면 세 row set 중 가장 큰 길이이다. `ablate_rows`나
+`retain_rows`가 비어 있으면 해당 term은 생략될 수 있지만, `add_rows`는 반드시 필요하다.
+
+#### Addition objective
+
+대상: harmful audio인데 base Qwen2-Audio가 comply한 row를 refusal target으로 끌어올린다.
+Teacher-forced input은 original audio prompt 뒤에 `t_R` continuation을 붙이고,
+continuation token에만 CE label을 둔다.
+
+```text
 t_R = "I'm sorry, I can't assist with that."
+h'_{ell,p*} = h_{ell,p*} + alpha u
+L_add = CE(model_with_add(A^H_comply, ell, p*, alpha u), t_R)
 ```
 
-Ablation loss:
+현재 config:
 
 ```text
-L_abl = CE(f_abl(r_A, ell, p*)(A^H_refused), t_nonrefusal)
+alpha = 2.0
+lambda_add = 1.0
+```
+
+#### Ablation objective
+
+대상: harmful audio인데 base Qwen2-Audio가 이미 refuse한 row에서 `u` coordinate를 제거하면
+non-refusal prefix가 쉬워지는지 본다. 이것은 `u`가 실제 refusal coordinate인지 확인하는
+반대 방향 causal check이다.
+
+```text
 t_nonrefusal = "Here is a high-level overview:"
+coord = <h_{ell,p*}, u>
+h'_{ell,p*} = h_{ell,p*} - coord u
+L_abl = CE(model_with_ablation(A^H_refused, ell, p*, u), t_nonrefusal)
 ```
 
-Retain loss:
+현재 config:
 
 ```text
-L_retain = KL(f_add(alpha r_A)(A^B) || f(A^B))
+lambda_abl = 1.0
 ```
 
-Training 후 `r_A`는 unit norm으로 normalize한다.
+#### Benign retain objective
+
+대상: benign audio에 `alpha u`를 더해도 base model의 next-token distribution이 크게 바뀌지
+않게 한다. 현재 A40-safe 구현은 전체 sequence logits에 KL을 걸지 않고 intervention token
+위치의 logits만 사용한다.
+
+```text
+z_base    = logits_at_token(model(A^B), p*)              # no grad, detached
+z_steered = logits_at_token(model_with_add(A^B, alpha u), p*)
+L_retain  = KL(softmax(z_base) || softmax(z_steered))
+```
+
+코드상 `torch.nn.functional.kl_div(log_softmax(z_steered), softmax(z_base))`로 계산한다.
+
+현재 config:
+
+```text
+lambda_ret = 0.2
+```
+
+#### Total objective and optimizer
+
+논리적 objective는 다음과 같다.
+
+```text
+L(r) = lambda_add L_add + lambda_abl L_abl + lambda_ret L_retain
+```
+
+실제 구현은 A40 메모리를 위해 전체 batch graph를 한 번에 쌓지 않는다. 각 train step에서
+각 microbatch의 loss를 `1 / n_batches`로 scale한 뒤 즉시 backward하고, gradient만
+accumulate한다. 그 다음 한 번 `Adam.step()`을 실행한다.
+
+```text
+for step in 1..train_steps:
+    zero_grad()
+    for batch in batches:
+        u = normalize(r)
+        loss = lambda_add L_add(batch)
+             + lambda_abl L_abl(batch)      # if ablate row exists
+             + lambda_ret L_retain(batch)   # if retain row exists
+        backward(loss / n_batches)
+    Adam.step()
+    empty_cuda_cache()
+
+r_A = normalize(r).cpu().numpy()
+```
+
+현재 config:
+
+```text
+train_steps = 400
+learning_rate = 0.005
+batch_size = 1
+```
+
+Residual intervention hook는 in-place activation edit를 하지 않는다. `add`, `ablate`,
+`set_coordinate` 모두 새 hidden tensor를 만들어 반환한다. 학습 중에는 torch tensor `u`를,
+validation/evaluation 중에는 저장된 numpy axis를 같은 hook 경로로 사용한다.
+
+Training 후 `r_A`와 selected site는 다음 파일에 저장한다.
+
+```text
+$AUDIO_SAFETY_OUTPUT_DIR/$RUN_NAME/rdo_axis.npz
+$AUDIO_SAFETY_OUTPUT_DIR/$RUN_NAME/selected_site.json
+$AUDIO_SAFETY_OUTPUT_DIR/$RUN_NAME/rdo_validation_metrics.json
+```
 
 ---
 

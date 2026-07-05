@@ -1,7 +1,7 @@
 # outputs/
 
 Run 산출물 디렉터리. git 추적 제외 (이 README만 커밋).
-실제 output 루트는 `$AUDIO_SAFETY_OUTPUT_DIR` (기본: `/workspace/audio_safety/outputs`)이며,
+실제 output 루트는 `$AUDIO_SAFETY_OUTPUT_DIR` (기본: `/workspace/audio_safety_data/outputs`)이며,
 로컬 실행 시 이 디렉터리를 쓸 수도 있다.
 
 ## Run 디렉터리 규약

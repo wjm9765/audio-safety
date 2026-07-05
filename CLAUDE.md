@@ -32,4 +32,5 @@
 - `docs/experiments/*/design.md`의 판정 기준(§0)은 절대 수정하지 않는다. 사용자가 요청해도 사전 등록 원칙을 먼저 상기시킨다.
 - `results.md`는 append-only. 과거 항목 수정 금지.
 - `scripts/*.py`는 `#!/usr/bin/env -S uv run python` shebang과 executable bit를 유지한다. 실행 예시는 `./scripts/<name>.py ...` 형식을 우선 사용한다.
+- 이미 `uv sync`된 프로젝트 `.venv`가 있으면 그 환경을 우선 사용한다. 임시 `pip install`/임의 `uv pip install` 상태를 전제로 작업하지 말고, 필요한 의존성은 `pyproject.toml`/`uv.lock` 또는 해당 격리 setup 스크립트에 반영한다.
 - Codex 호출은 MCP(`mcp__codex__codex`)를 우선 사용하고, 없으면 `codex exec` CLI를 사용한다.

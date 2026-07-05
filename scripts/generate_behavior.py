@@ -9,8 +9,10 @@ Example:
 import argparse
 from pathlib import Path
 
+from tqdm.auto import tqdm
+
 from audio_safety.config import load_experiment_config
-from audio_safety.evaluation import label_behavior_records
+from audio_safety.evaluation import label_output
 from audio_safety.models.qwen2_audio import generate_audio_response, load_qwen2_audio
 from audio_safety.utils.io import load_jsonl, save_jsonl
 from audio_safety.utils.paths import resolve_paths
@@ -22,7 +24,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-dir", type=Path, default=None, help="override data root")
     parser.add_argument("--cache-dir", type=Path, default=None, help="override model cache root")
     parser.add_argument("--limit", type=int, default=None, help="max rows to generate")
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="discard existing behavior outputs instead of resuming by row key",
+    )
     return parser.parse_args()
+
+
+def row_key(row: dict[str, object]) -> tuple[str, str, str]:
+    return (
+        str(row.get("item_id")),
+        str(row.get("safety_label")),
+        str(row.get("style")),
+    )
 
 
 def main() -> None:
@@ -38,9 +53,26 @@ def main() -> None:
     if args.limit is not None:
         rows = rows[: args.limit]
 
+    outputs: list[dict[str, object]] = []
+    completed: set[tuple[str, str, str]] = set()
+    if output_path.exists() and not args.overwrite:
+        outputs = load_jsonl(output_path)
+        completed = {row_key(row) for row in outputs if str(row.get("output") or "").strip()}
+        print(
+            f"[behavior] resuming from {len(completed)}/{len(rows)} existing outputs in {output_path}",
+            flush=True,
+        )
+    elif output_path.exists() and args.overwrite:
+        print(f"[behavior] overwriting existing outputs at {output_path}", flush=True)
+
+    pending = [row for row in rows if row_key(row) not in completed]
+    print(f"[behavior] pending rows: {len(pending)}/{len(rows)}", flush=True)
+
     model, processor = load_qwen2_audio(cfg.model, cache_dir=paths.cache_dir)
-    outputs = []
-    for row in rows:
+    progress = tqdm(pending, desc="Qwen2-Audio behavior", unit="row")
+    for row in progress:
+        key = row_key(row)
+        progress.set_postfix_str("/".join(key))
         audio_path = paths.data_dir / str(row["path"])
         response = generate_audio_response(
             model,
@@ -51,13 +83,16 @@ def main() -> None:
         )
         updated = dict(row)
         updated["output"] = response
+        label, refusal_mode, needs_review = label_output(response, safety_label=str(row["safety_label"]))
+        updated["behavior_label"] = label
+        updated["refusal_mode"] = refusal_mode
+        updated["needs_manual_review"] = needs_review
         outputs.append(updated)
+        save_jsonl(outputs, output_path)
 
-    labeled = label_behavior_records(outputs)
-    save_jsonl(labeled, output_path)
-    review_n = sum(bool(row.get("needs_manual_review")) for row in labeled)
-    print(f"[behavior] wrote {len(labeled)} outputs -> {output_path}")
-    print(f"[behavior] needs manual review: {review_n}/{len(labeled)}")
+    review_n = sum(bool(row.get("needs_manual_review")) for row in outputs)
+    print(f"[behavior] wrote {len(outputs)} outputs -> {output_path}")
+    print(f"[behavior] needs manual review: {review_n}/{len(outputs)}")
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 # data/
 
 Raw data is not committed. Store actual files under `$AUDIO_SAFETY_DATA_DIR`
-(default: `/workspace/audio_safety/data`). This repository directory only records
+(default: `/workspace/audio_safety_data/data`). This repository directory only records
 dataset choices and manifest contracts.
 
 ## Selected Initial Dataset
@@ -59,12 +59,16 @@ TTS engine:
 CosyVoice2
 ```
 
-The repository provides a command-template adapter instead of hardcoding a
-CosyVoice2 installation. Set `dataset.tts.command_template` by config override or
-YAML edit. The template may use:
+The repository provides command-template adapters instead of hardcoding a
+CosyVoice2 installation. For production renders, prefer
+`dataset.tts.batch_command_template`: it passes a JSONL job file to
+`scripts/cosyvoice2_tts.py --batch-jsonl`, so CosyVoice2 is loaded once on the GPU
+and then reused for every pending wav. `dataset.tts.command_template` remains
+for single-file debugging. Templates may use:
 
 ```text
 {text} {text_json} {style} {output} {item_id} {safety_label}
+{batch_jsonl} {batch_jobs_file}
 ```
 
 Example shape:
@@ -77,16 +81,17 @@ Example shape:
 
 Remove `--dry-run` only after the command template works on the GPU machine.
 
-Initial styles:
+Initial fast-gate styles:
 
 ```text
 neutral
 sad
-fearful
-angry
-elderly_male
-child_female
 ```
+
+This is the minimum style setting used for the first direction check: neutral is
+the baseline and sad is the non-neutral condition. With 150 pairs this renders
+600 wav files instead of 1800. Broaden `configs/datasets/audio_rdo_gate.yaml`
+back to the full style list after the RDO direction is promising.
 
 Expected render tree:
 

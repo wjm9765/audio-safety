@@ -2,7 +2,7 @@
 #   1. explicit CLI argument
 #   2. environment variable (AUDIO_SAFETY_WORKSPACE, ...)
 #   3. this file
-#   4. /workspace/audio_safety/{data,outputs,cache}
+#   4. /workspace/audio_safety_data/{data,outputs,cache}
 workspace: null
 data_dir: null
 output_dir: null

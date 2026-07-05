@@ -34,6 +34,41 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+
+def require_eval_artifacts(run_dir: Path, cfg, args: argparse.Namespace) -> None:
+    train_missing = [
+        path
+        for path in (run_dir / cfg.rdo.axis_file, run_dir / cfg.rdo.selected_site_file)
+        if not path.exists()
+    ]
+    extract_missing = [
+        path
+        for path in (
+            run_dir / cfg.rdo.baseline_vectors_file,
+            run_dir / cfg.rdo.activations_file,
+            run_dir / cfg.rdo.activation_metadata_file,
+        )
+        if not path.exists()
+    ]
+    if not train_missing and not extract_missing:
+        return
+    parts = ["Missing artifacts for RDO evaluation."]
+    if train_missing:
+        parts.append("Training artifacts missing:")
+        parts.extend(f"  - {path}" for path in train_missing)
+        parts.append(
+            "Run first:\n"
+            f"  ./scripts/train_rdo_axis.py --config {args.config} --run-name {args.run_name}"
+        )
+    if extract_missing:
+        parts.append("Activation/baseline artifacts missing:")
+        parts.extend(f"  - {path}" for path in extract_missing)
+        parts.append(
+            "Then run:\n"
+            f"  ./scripts/extract_rdo_activations.py --config {args.config} --run-name {args.run_name}"
+        )
+    raise SystemExit("\n".join(parts))
+
 def _valid(rows):
     return [
         row
@@ -98,6 +133,7 @@ def main() -> None:
     run_dir = run_output_dir(paths.output_dir, args.run_name)
     pairs = load_audio_rdo_pairs(paths.data_dir, cfg.dataset)
     split_map = split_ids(pairs, cfg)
+    require_eval_artifacts(run_dir, cfg, args)
     rows = load_jsonl(paths.data_dir / cfg.dataset.target_generation.outputs_file)
     heldout = _valid(rows_for_split(rows, split_map, "heldout"))
     if args.limit is not None:

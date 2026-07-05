@@ -84,68 +84,159 @@ The current implementation reflects these decisions:
 ## Implemented Pipeline Shape
 
 The stage scripts are executable and use `uv` in their shebangs, so they can be
-called as `./scripts/<name>.py` on a prepared machine.
+called as `./scripts/<name>.py` on a prepared machine. The current experiment
+config is:
 
-Current stage order:
+```text
+configs/experiments/exp1_refusal_cone_drift.yaml
+```
+
+Current stage order on the A40 server:
 
 ```bash
-./scripts/prepare_audio_rdo_pairs.py --config configs/experiments/audio_rdo_gate.yaml
-./scripts/render_audio_rdo.py --config configs/experiments/audio_rdo_gate.yaml --dry-run
-./scripts/render_audio_rdo.py --config configs/experiments/audio_rdo_gate.yaml
-./scripts/score_transcripts.py --config configs/experiments/audio_rdo_gate.yaml
-./scripts/download_qwen2_audio.py --config configs/experiments/audio_rdo_gate.yaml
-./scripts/generate_behavior.py --config configs/experiments/audio_rdo_gate.yaml
-./scripts/train_rdo_axis.py --config configs/experiments/audio_rdo_gate.yaml
-./scripts/extract_rdo_activations.py --config configs/experiments/audio_rdo_gate.yaml
-./scripts/evaluate_rdo_gate.py --config configs/experiments/audio_rdo_gate.yaml
+uv sync
+uv sync --group gpu
+
+export OPENROUTER_API_KEY=<your_key>
+
+./scripts/prepare_audio_rdo_pairs.py \
+  --config configs/experiments/exp1_refusal_cone_drift.yaml \
+  --limit 150
+
+./scripts/cosyvoice2_tts.py --setup-only
+
+./scripts/render_audio_rdo.py \
+  --config configs/experiments/exp1_refusal_cone_drift.yaml
+
+./scripts/score_transcripts.py \
+  --config configs/experiments/exp1_refusal_cone_drift.yaml
+
+./scripts/download_qwen2_audio.py \
+  --config configs/experiments/exp1_refusal_cone_drift.yaml
+
+./scripts/generate_behavior.py \
+  --config configs/experiments/exp1_refusal_cone_drift.yaml
+
+export PYTORCH_ALLOC_CONF=expandable_segments:True
+export RUN_NAME=exp1_$(date +%Y%m%d_%H%M)_audio_rdo_gate
+
+./scripts/train_rdo_axis.py \
+  --config configs/experiments/exp1_refusal_cone_drift.yaml \
+  --run-name "$RUN_NAME"
+
+./scripts/extract_rdo_activations.py \
+  --config configs/experiments/exp1_refusal_cone_drift.yaml \
+  --run-name "$RUN_NAME"
+
+./scripts/evaluate_rdo_gate.py \
+  --config configs/experiments/exp1_refusal_cone_drift.yaml \
+  --run-name "$RUN_NAME"
 ```
 
 `scripts/run_experiment.py` also exposes named stages, but `all` is intentionally
 not wired as a single monolithic GPU run. The expensive path should remain
 resumable stage by stage.
 
-## Current Implementation Status
+### Fast RDO config
 
-Pushed commits:
+For initial direction checks, use:
 
-- `95c4ef2 Add Audio-RDO refusal axis gate`
-- `cc8574f Implement staged Audio-RDO data pipeline`
-
-Implemented pieces:
-
-- OpenRouter benign-pair generation helper.
-- Command-template TTS adapter with dry-run support.
-- Simple ASR/transcript scoring path with WER and harmful-token checks.
-- Heuristic 4-way behavior labeler.
-- Qwen2-Audio loading, prompt formatting, generation, hidden-state capture, and
-  residual-stream intervention helpers.
-- Audio-RDO training batches with per-input token positions.
-- Candidate site validation, baseline vector construction, activation
-  extraction, style escape metrics, restoration metrics, and final gate summary.
-- CPU tests for config loading, RDO utility behavior, text scoring, transcript
-  scoring, and label heuristics.
-
-Verified locally:
-
-```bash
-uv run pytest tests/test_config.py tests/test_audio_rdo.py tests/test_stage_helpers.py
+```text
+configs/experiments/exp1_refusal_cone_drift_fast.yaml
 ```
 
-Result at implementation time: `18 passed`.
+It differs from the full config only in runtime-heavy RDO/stat settings:
+
+```text
+hidden.layers = [12, 16, 20]
+hidden.positions = [first_generation_prelogit]
+rdo.train_steps = 50
+rdo.limit_per_site = 10
+baselines.random_vectors = 4
+stats.n_permutations = 1000
+stats.n_bootstrap = 500
+```
+
+This gives 3 RDO candidate sites. Each site uses 50 x 10 = 500 training
+microbatches, plus limited validation intervention generations. Expected A40
+wall time after model load is roughly 1-2 hours. It is a direction-check config,
+not the paper-facing final run.
+
+## Current Implementation Status
+
+Current server-oriented implementation snapshot, 2026-07-05:
+
+- Raw data, cache, and run outputs default to `/workspace/audio_safety_data`.
+  The git checkout remains `/workspace/audio-safety`.
+- Base project dependencies are managed with `uv sync`; GPU dependencies use
+  `uv sync --group gpu`. The only intentional isolated virtualenv is the
+  CosyVoice2 adapter under the data/cache workspace, because its dependency set
+  conflicts with the main Qwen2-Audio environment.
+- OpenRouter pair generation is resumable. Per-row OpenRouter failures are
+  written to a sidecar `.errors.jsonl` instead of aborting the whole run, and a
+  later successful retry clears that stale sidecar entry.
+- Current fast gate uses two styles, `neutral` and `sad`: 150 pairs x
+  harmful/benign x 2 styles = 600 wav files. Broaden the style list only after
+  the RDO direction is promising.
+- CosyVoice2 rendering uses `scripts/cosyvoice2_tts.py --batch-jsonl`; the model
+  is loaded once and pending wav files are generated from a JSONL job queue.
+- ASR transcript control is currently `dataset.asr.mode: skip`. The
+  `score_transcripts.py` stage remains in the pipeline only to produce the
+  downstream scored manifest with `transcript_control_skipped=true` and
+  `transcript_control_passed=true`.
+- Qwen2-Audio processor calls use `audio=` plus `sampling_rate=`. The previous
+  `audios=` warning indicated the processor was ignoring audio input and is not
+  acceptable for real behavior generation.
+- `generate_behavior.py` is resumable row by row, has tqdm progress, and supports
+  `--overwrite` when behavior outputs must be regenerated after an inference fix.
+- Qwen decoder layers are resolved through `model.language_model.layers`; current
+  Qwen2-Audio exposes 32 decoder layers. The configured sweep is layers
+  `[8, 12, 16, 20, 24, 28]` x positions `assistant_start_pre` and
+  `first_generation_prelogit`.
+- RDO training was made A40-safe: gradients are accumulated with one backward per
+  training microbatch, retain KL is computed only at the intervention token, and
+  residual hooks avoid in-place activation edits. This prevents the previous
+  graph-retention OOM on a 44GB A40.
+- Residual intervention hooks accept both trainable torch tensors and saved numpy
+  axes, so training and validation/evaluation use the same hook path.
+
+Recent committed baseline:
+
+- `7181586 Allow skipping ASR transcript control`
+- `bc14bb8 Handle OpenRouter pair generation failures`
+- `f4a31c9 Make audio RDO setup reproducible`
+- `723c27d Pin GPU dependencies to PyTorch CUDA 12.8`
+- `35a440a Add Audio-RDO experiment context`
+- `cc8574f Implement staged Audio-RDO data pipeline`
+- `95c4ef2 Add Audio-RDO refusal axis gate`
+
+Current local verification after the A40 RDO memory fix:
+
+```bash
+uv run pytest
+# 51 passed
+```
+
+A one-site GPU smoke run with `train_steps=1`, `limit=1`, layer 8, and
+`assistant_start_pre` completed and wrote `rdo_axis.npz`. This is a smoke test
+only; it is not an experiment result.
 
 ## Known Boundaries
 
-- The actual GPU model run has not been executed locally by design.
+- The full train -> activation extraction -> heldout evaluation run is still the
+  experiment result path. The documented GPU smoke only proves the RDO code path
+  can execute without the previous A40 OOM/autograd failures.
 - The TTS engine itself is not vendored into this repo. The repo provides a
-  command-template adapter; the GPU/cloud environment must provide the concrete
-  TTS command.
+  reproducible CosyVoice2 setup/render adapter, and the GPU environment downloads
+  the external repo/checkpoint into `/workspace/audio_safety_data/cache`.
 - OpenRouter model availability and pricing can change. The config contains the
   current default and fallback, but the cloud run should confirm availability.
 - Heuristic labeling is intentionally lightweight. Ambiguous harmful-compliance
   rows are marked for manual review instead of being treated as final judge
   labels.
-- Style classifier enforcement is off for the first gate. Transcript quality and
-  decoding-failure filtering carry the early-stage quality control.
+- ASR transcript control and style-classifier enforcement are disabled for the
+  current fast gate. Decoding-failure filtering still applies; transcript/style
+  validation should be restored before making a stronger final paper claim.
 
 ## Go / No-Go Reminder
 

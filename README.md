@@ -9,13 +9,14 @@ The current first experiment is the **Audio-RDO Refusal Axis Existence Gate**:
 This replaces the earlier "multi-cone drift first" plan. Cone geometry, token-aware defense, and style-aware multi-cone interventions are explicitly downstream of this gate.
 
 - **Design:** [`docs/experiments/exp1_refusal_cone_drift/design.md`](docs/experiments/exp1_refusal_cone_drift/design.md)
+- **Current implementation context:** [`docs/experiments/exp1_refusal_cone_drift/context.md`](docs/experiments/exp1_refusal_cone_drift/context.md)
 - **Results log:** [`docs/experiments/exp1_refusal_cone_drift/results.md`](docs/experiments/exp1_refusal_cone_drift/results.md)
 
 ## Method Sketch
 
 1. Build a controlled harmful-benign audio dataset from FigStep/SafeBench seeds, CosyVoice2 style renders, and transcript controls.
 2. Label outputs as `policy_refusal`, `harmful_compliance`, `benign_answer`, or `decoding_failure`.
-3. Train an audio-native RDO refusal axis `r_A` at candidate Qwen2-Audio residual stream sites.
+3. Train an audio-native RDO refusal axis `r_A` at candidate Qwen2-Audio residual stream sites. The current implementation freezes Qwen2-Audio, optimizes only one hidden-size vector per candidate site, uses add/ablate/benign-retain losses, and accumulates gradients one microbatch at a time to fit on an A40.
 4. Validate `r_A` with addition, ablation, and paired benign retention.
 5. Compare against `MDSteer-c2r`, SARSteer-style text-derived refusal vector, and random controls at matched ORR.
 6. Test whether transcript-fixed style shifts reduce `r_A` occupancy and whether coordinate restoration recovers refusal.
@@ -37,16 +38,17 @@ server NVIDIA driver is upgraded accordingly.
 On a GPU server, point caches at a persistent workspace:
 
 ```bash
-export AUDIO_SAFETY_WORKSPACE=/workspace/audio_safety
-export AUDIO_SAFETY_DATA_DIR=/workspace/audio_safety/data
-export AUDIO_SAFETY_OUTPUT_DIR=/workspace/audio_safety/outputs
-export AUDIO_SAFETY_CACHE_DIR=/workspace/audio_safety/cache
-export HF_HOME=/workspace/cache/huggingface
-export HF_HUB_CACHE=/workspace/cache/huggingface/hub
-export HF_DATASETS_CACHE=/workspace/cache/huggingface/datasets
-export TORCH_HOME=/workspace/cache/torch
-export XDG_CACHE_HOME=/workspace/cache
+export AUDIO_SAFETY_WORKSPACE=/workspace/audio_safety_data
+export AUDIO_SAFETY_DATA_DIR=/workspace/audio_safety_data/data
+export AUDIO_SAFETY_OUTPUT_DIR=/workspace/audio_safety_data/outputs
+export AUDIO_SAFETY_CACHE_DIR=/workspace/audio_safety_data/cache
+export HF_HOME=/workspace/audio_safety_data/cache/huggingface
+export HF_HUB_CACHE=/workspace/audio_safety_data/cache/huggingface/hub
+export HF_DATASETS_CACHE=/workspace/audio_safety_data/cache/huggingface/datasets
+export TORCH_HOME=/workspace/audio_safety_data/cache/torch
+export XDG_CACHE_HOME=/workspace/audio_safety_data/cache
 export OPENROUTER_API_KEY=<your_key>
+export PYTORCH_ALLOC_CONF=expandable_segments:True  # recommended for RDO training on A40
 ```
 
 ## Qwen2-Audio
@@ -60,7 +62,7 @@ The project follows the official Qwen/Hugging Face inference path:
 
 ./scripts/qwen2_audio_infer.py \
   --config configs/experiments/exp1_refusal_cone_drift.yaml \
-  --audio /workspace/audio_safety/data/audio/demo.wav \
+  --audio /workspace/audio_safety_data/data/audio/demo.wav \
   --instruction "Please answer the question in the audio."
 ```
 
@@ -83,9 +85,10 @@ export OPENROUTER_API_KEY=<your_key>
   --config configs/experiments/exp1_refusal_cone_drift.yaml \
   --dry-run
 
-# The default TTS command uses scripts/cosyvoice2_tts.py. On first real render it
-# bootstraps the official CosyVoice repo, a separate uv TTS venv, and the
-# FunAudioLLM/CosyVoice2-0.5B checkpoint under AUDIO_SAFETY_CACHE_DIR.
+# The default renderer uses scripts/cosyvoice2_tts.py in batch mode. It loads
+# CosyVoice2 once, then renders all pending jobs from a JSONL queue under
+# AUDIO_SAFETY_DATA_DIR/manifests/. The current fast gate uses two styles
+# (neutral, sad): 150 pairs x harmful/benign x 2 styles = 600 wav files.
 ./scripts/render_audio_rdo.py \
   --config configs/experiments/exp1_refusal_cone_drift.yaml
 
@@ -122,6 +125,36 @@ extract_activations, style_escape, restoration, stats
 ```
 
 `all` is intentionally not wired; run stages explicitly so failures are resumable.
+
+## Fast RDO Direction Check
+
+For the first A40 direction check, use the permanent fast config instead of a
+temporary YAML. It keeps the same data/model setup but reduces the RDO sweep to
+3 candidate sites, 50 train steps, and 10 train/validation rows per site. Expected
+wall time after Qwen2-Audio loads is roughly 1-2 hours on the current A40 setup.
+
+```bash
+export PYTORCH_ALLOC_CONF=expandable_segments:True
+export CONFIG=configs/experiments/exp1_refusal_cone_drift_fast.yaml
+export RUN_NAME=exp1_fast_$(date +%Y%m%d_%H%M)_audio_rdo_gate
+
+./scripts/train_rdo_axis.py \
+  --config "$CONFIG" \
+  --run-name "$RUN_NAME"
+
+./scripts/extract_rdo_activations.py \
+  --config "$CONFIG" \
+  --run-name "$RUN_NAME"
+
+./scripts/evaluate_rdo_gate.py \
+  --config "$CONFIG" \
+  --run-name "$RUN_NAME"
+
+cat /workspace/audio_safety_data/outputs/$RUN_NAME/metrics.json
+```
+
+Use `configs/experiments/exp1_refusal_cone_drift.yaml` for the full paper-facing
+run after the fast config gives a promising signal.
 
 ## Layout
 

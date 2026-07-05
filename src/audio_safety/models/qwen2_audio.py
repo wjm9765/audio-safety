@@ -163,7 +163,13 @@ def prepare_qwen2_audio_inputs(
     )
     sample_rate = processor.feature_extractor.sampling_rate
     audios = [load_audio_array(ref, sample_rate) for ref in _audio_refs(conversation)]
-    inputs = processor(text=text, audios=audios, return_tensors="pt", padding=padding)
+    inputs = processor(
+        text=text,
+        audio=audios,
+        sampling_rate=sample_rate,
+        return_tensors="pt",
+        padding=padding,
+    )
     return move_inputs_to_device(inputs, device) if device is not None else inputs
 
 
@@ -193,8 +199,20 @@ def prepare_qwen2_audio_teacher_forced_inputs(
     full_text = prompt_text + target
     sample_rate = processor.feature_extractor.sampling_rate
     audios = [load_audio_array(ref, sample_rate) for ref in _audio_refs(conversation)]
-    prompt_inputs = processor(text=prompt_text, audios=audios, return_tensors="pt", padding=True)
-    full_inputs = processor(text=full_text, audios=audios, return_tensors="pt", padding=True)
+    prompt_inputs = processor(
+        text=prompt_text,
+        audio=audios,
+        sampling_rate=sample_rate,
+        return_tensors="pt",
+        padding=True,
+    )
+    full_inputs = processor(
+        text=full_text,
+        audio=audios,
+        sampling_rate=sample_rate,
+        return_tensors="pt",
+        padding=True,
+    )
     prompt_len = prompt_inputs.input_ids.shape[1]
     labels = full_inputs.input_ids.clone()
     labels[:, :prompt_len] = ignore_index
@@ -269,13 +287,15 @@ def resolve_audio_position_indices(
     )
     no_gen_len = processor(
         text=no_generation,
-        audios=audios,
+        audio=audios,
+        sampling_rate=sample_rate,
         return_tensors="pt",
         padding=True,
     ).input_ids.shape[1]
     gen_len = processor(
         text=with_generation,
-        audios=audios,
+        audio=audios,
+        sampling_rate=sample_rate,
         return_tensors="pt",
         padding=True,
     ).input_ids.shape[1]

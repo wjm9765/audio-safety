@@ -9,20 +9,35 @@ from collections.abc import Iterable
 from typing import Any
 
 
+DECODER_LAYER_PATHS = (
+    "model.language_model.layers",
+    "language_model.layers",
+    "language_model.model.layers",
+    "model.layers",
+    "layers",
+)
+
+
 def get_decoder_layers(model: Any) -> list[Any]:
-    """Locate the decoder layer stack across wrapper variants (Qwen2-Audio wraps the
-    Qwen2 LM; attribute paths differ between transformers versions)."""
-    for path in ("language_model.model.layers", "model.layers", "layers"):
+    """Locate the decoder layer stack across wrapper variants.
+
+    Qwen2-Audio wrappers have changed across transformers versions. Current HF
+    Qwen2AudioForConditionalGeneration exposes the LLM stack at
+    ``model.language_model.layers``.
+    """
+    for path in DECODER_LAYER_PATHS:
         node = model
         try:
             for attr in path.split("."):
                 node = getattr(node, attr)
         except AttributeError:
             continue
-        return list(node)
+        layers = list(node)
+        if layers:
+            return layers
+    tried = ", ".join(DECODER_LAYER_PATHS)
     raise AttributeError(
-        f"could not locate decoder layers on {type(model).__name__}; "
-        "inspect the model and extend get_decoder_layers()"
+        f"could not locate decoder layers on {type(model).__name__}; tried: {tried}"
     )
 
 
@@ -148,11 +163,13 @@ class ResidualStreamIntervention:
         if token_index < 0 or token_index >= hidden.shape[1]:
             return output
 
-        vector = self._vector.to(device=hidden.device, dtype=hidden.dtype)
+        if torch.is_tensor(self._vector):
+            vector = self._vector.to(device=hidden.device, dtype=hidden.dtype)
+        else:
+            vector = torch.as_tensor(self._vector, device=hidden.device, dtype=hidden.dtype)
         vector = vector / torch.clamp(torch.linalg.vector_norm(vector), min=self._eps)
 
-        edited = hidden.clone()
-        current = edited[:, token_index, :]
+        current = hidden[:, token_index, :]
 
         if self._mode == "add":
             replacement = current + self._scale * vector
@@ -178,7 +195,11 @@ class ResidualStreamIntervention:
             coord = current @ vector
             replacement = current + (target - coord).unsqueeze(-1) * vector
 
-        edited[:, token_index, :] = replacement
+        token_mask = torch.nn.functional.one_hot(
+            torch.tensor(token_index, device=hidden.device),
+            num_classes=hidden.shape[1],
+        ).to(dtype=hidden.dtype)
+        edited = hidden + token_mask.view(1, -1, 1) * (replacement - current).unsqueeze(1)
         return _replace_hidden_output(output, edited)
 
     def __enter__(self) -> "ResidualStreamIntervention":

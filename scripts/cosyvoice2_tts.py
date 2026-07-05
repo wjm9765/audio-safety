@@ -5,7 +5,8 @@ This script keeps CosyVoice2 isolated from the project environment. On first use
 clones the official CosyVoice repo under AUDIO_SAFETY_CACHE_DIR, creates a local
 TTS virtualenv with uv, installs the official requirements there, downloads the
 CosyVoice2-0.5B checkpoint from Hugging Face, then re-execs itself inside that
-TTS virtualenv to render one wav file.
+TTS virtualenv. Single-file rendering is supported for debugging; production
+renders should use --batch-jsonl so the CosyVoice model is loaded once per batch.
 """
 
 import argparse
@@ -14,11 +15,14 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
-DEFAULT_WORKSPACE = Path("/workspace/audio_safety")
+DEFAULT_WORKSPACE = Path("/workspace/audio_safety_data")
 DEFAULT_REPO = "https://github.com/FunAudioLLM/CosyVoice.git"
 DEFAULT_MODEL_ID = "FunAudioLLM/CosyVoice2-0.5B"
+DEFAULT_TTS_PYTHON = "3.11"
 CHILD_ENV = "AUDIO_SAFETY_COSYVOICE2_CHILD"
+TTS_BUILD_DEPS = ["setuptools<81", "wheel", "wheel_stub", "numpy==1.26.4", "cython"]
 
 STYLE_INSTRUCTIONS = {
     "neutral": "Speak in a neutral, clear voice.<|endofprompt|>",
@@ -34,6 +38,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--text", default=None, help="raw text to render")
     parser.add_argument("--text-json", default=None, help="JSON string containing the text")
+    parser.add_argument("--batch-jsonl", type=Path, default=None, help="JSONL batch render jobs")
     parser.add_argument("--style", default="neutral", help="style key from the experiment config")
     parser.add_argument("--output", type=Path, default=None, help="wav output path")
     parser.add_argument("--setup-only", action="store_true", help="bootstrap CosyVoice2 and exit")
@@ -45,7 +50,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model-id", default=DEFAULT_MODEL_ID, help="Hugging Face model ID")
     parser.add_argument("--prompt-audio", type=Path, default=None, help="zero-shot prompt wav")
     parser.add_argument("--prompt-text", default="", help="optional zero-shot prompt text")
-    parser.add_argument("--python", default="3.10", help="Python version for the TTS virtualenv")
+    parser.add_argument(
+        "--python",
+        default=DEFAULT_TTS_PYTHON,
+        help="Python version for the isolated TTS virtualenv",
+    )
     return parser.parse_args()
 
 
@@ -97,7 +106,34 @@ def ensure_venv(venv_dir: Path, repo_dir: Path, python_request: str) -> None:
     stamp = venv_dir / ".audio_safety_cosyvoice2_requirements_installed"
     if stamp.exists():
         return
-    run(["uv", "pip", "install", "--python", str(py), "-r", str(requirements)])
+    run(
+        [
+            "uv",
+            "--no-cache",
+            "pip",
+            "install",
+            "--python",
+            str(py),
+            "--index-strategy",
+            "unsafe-best-match",
+            *TTS_BUILD_DEPS,
+        ]
+    )
+    run(
+        [
+            "uv",
+            "--no-cache",
+            "pip",
+            "install",
+            "--python",
+            str(py),
+            "--index-strategy",
+            "unsafe-best-match",
+            "--no-build-isolation",
+            "-r",
+            str(requirements),
+        ]
+    )
     stamp.write_text("ok\n")
 
 
@@ -123,8 +159,11 @@ def bootstrap(args: argparse.Namespace) -> tuple[Path, Path, Path, Path]:
 def reexec_in_tts_venv(args: argparse.Namespace, venv_dir: Path) -> None:
     env = os.environ.copy()
     env[CHILD_ENV] = "1"
+    cache_root = project_cache_dir(args)
     env.setdefault("HF_HOME", str(DEFAULT_WORKSPACE / "cache" / "huggingface"))
     env.setdefault("HF_HUB_CACHE", str(DEFAULT_WORKSPACE / "cache" / "huggingface" / "hub"))
+    env.setdefault("TRITON_CACHE_DIR", str(cache_root / "triton"))
+    env.setdefault("TORCH_EXTENSIONS_DIR", str(cache_root / "torch_extensions"))
     py = venv_python(venv_dir)
     os.execvpe(str(py), [str(py), str(Path(__file__).resolve()), *sys.argv[1:]], env)
 
@@ -137,10 +176,27 @@ def text_from_args(args: argparse.Namespace) -> str:
             return args.text_json
     if args.text is not None:
         return args.text
-    raise ValueError("one of --text or --text-json is required")
+    raise ValueError("one of --text, --text-json, or --batch-jsonl is required")
 
 
-def render(args: argparse.Namespace) -> None:
+def text_from_job(job: dict[str, Any]) -> str:
+    if job.get("text") is not None:
+        return str(job["text"])
+    if job.get("text_json") is not None:
+        value = str(job["text_json"])
+        try:
+            return str(json.loads(value))
+        except json.JSONDecodeError:
+            return value
+    raise ValueError(f"batch job is missing text/text_json: {job}")
+
+
+def load_batch_jobs(path: Path) -> list[dict[str, Any]]:
+    with path.open() as f:
+        return [json.loads(line) for line in f if line.strip()]
+
+
+def prepare_renderer(args: argparse.Namespace):
     _root, repo_dir, _venv_dir, model_dir = paths(args)
     ensure_model(model_dir, args.model_id)
 
@@ -151,17 +207,25 @@ def render(args: argparse.Namespace) -> None:
     import torchaudio
     from cosyvoice.cli.cosyvoice import AutoModel
 
-    text = text_from_args(args)
-    output = args.output
-    if output is None:
-        raise ValueError("--output is required unless --setup-only is used")
-    output.parent.mkdir(parents=True, exist_ok=True)
-
     prompt_audio = args.prompt_audio or repo_dir / "asset" / "zero_shot_prompt.wav"
-    instruction = STYLE_INSTRUCTIONS.get(
-        args.style, f"Speak in a {args.style} style.<|endofprompt|>"
-    )
     model = AutoModel(model_dir=str(model_dir))
+    return torch, torchaudio, model, prompt_audio
+
+
+def synthesize_to_file(
+    *,
+    torch,
+    torchaudio,
+    model,
+    text: str,
+    style: str,
+    prompt_audio: Path,
+    output: Path,
+) -> None:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    instruction = STYLE_INSTRUCTIONS.get(
+        style, f"Speak in a {style} style.<|endofprompt|>"
+    )
     chunks = []
     for chunk in model.inference_instruct2(text, instruction, str(prompt_audio), stream=False):
         chunks.append(chunk["tts_speech"])
@@ -172,6 +236,59 @@ def render(args: argparse.Namespace) -> None:
     print(f"[cosyvoice2] wrote {output}", flush=True)
 
 
+def render(args: argparse.Namespace) -> None:
+    text = text_from_args(args)
+    output = args.output
+    if output is None:
+        raise ValueError("--output is required unless --setup-only or --batch-jsonl is used")
+    torch, torchaudio, model, prompt_audio = prepare_renderer(args)
+    synthesize_to_file(
+        torch=torch,
+        torchaudio=torchaudio,
+        model=model,
+        text=text,
+        style=args.style,
+        prompt_audio=prompt_audio,
+        output=output,
+    )
+
+
+def render_batch(args: argparse.Namespace) -> None:
+    if args.batch_jsonl is None:
+        raise ValueError("--batch-jsonl is required for batch rendering")
+    jobs = load_batch_jobs(args.batch_jsonl)
+    if not jobs:
+        print(f"[cosyvoice2] no batch jobs in {args.batch_jsonl}", flush=True)
+        return
+    torch, torchaudio, model, prompt_audio = prepare_renderer(args)
+    total = len(jobs)
+    for index, job in enumerate(jobs, start=1):
+        output_value = job.get("output_path") or job.get("output")
+        if output_value is None:
+            raise ValueError(f"batch job is missing output_path/output: {job}")
+        output = Path(str(output_value))
+        style = str(job.get("style") or args.style)
+        item_id = str(job.get("item_id") or job.get("query_id") or output.stem)
+        safety_label = str(job.get("safety_label") or job.get("query_type") or "unknown")
+        if output.exists():
+            print(f"[cosyvoice2] batch {index}/{total} exists {output}", flush=True)
+            continue
+        print(
+            f"[cosyvoice2] batch {index}/{total} {item_id} {safety_label}/{style}",
+            flush=True,
+        )
+        synthesize_to_file(
+            torch=torch,
+            torchaudio=torchaudio,
+            model=model,
+            text=text_from_job(job),
+            style=style,
+            prompt_audio=prompt_audio,
+            output=output,
+        )
+    print(f"[cosyvoice2] batch complete {total} jobs from {args.batch_jsonl}", flush=True)
+
+
 def main() -> None:
     args = parse_args()
     _root, _repo_dir, venv_dir, model_dir = bootstrap(args)
@@ -180,6 +297,9 @@ def main() -> None:
     if args.setup_only:
         ensure_model(model_dir, args.model_id)
         print(f"[cosyvoice2] setup complete under {project_cache_dir(args)}")
+        return
+    if args.batch_jsonl is not None:
+        render_batch(args)
         return
     render(args)
 

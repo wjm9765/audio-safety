@@ -2,13 +2,13 @@
 """Single-file Qwen2-Audio inference smoke script.
 
 This follows the official Qwen2-Audio model-card flow:
-AutoProcessor.apply_chat_template -> processor(text, audios=...) ->
+AutoProcessor.apply_chat_template -> processor(text, audio=...) ->
 Qwen2AudioForConditionalGeneration.generate.
 
 Example:
     ./scripts/qwen2_audio_infer.py \
         --config configs/experiments/exp1_refusal_cone_drift.yaml \
-        --audio /workspace/audio_safety/data/audio/demo.wav \
+        --audio /workspace/audio_safety_data/data/audio/demo.wav \
         --instruction "Please answer the question in the audio."
 """
 

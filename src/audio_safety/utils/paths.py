@@ -4,7 +4,7 @@ Priority (AGENTS.md '경로와 캐시 정책'):
     1. explicit CLI argument
     2. project environment variable (AUDIO_SAFETY_*)
     3. config file value
-    4. /workspace/audio_safety/{data,outputs,cache}
+    4. /workspace/audio_safety_data/{data,outputs,cache}
 
 Never reference ~/.cache, /root, or personal absolute paths anywhere in code.
 """
@@ -20,7 +20,7 @@ ENV_DATA_DIR = "AUDIO_SAFETY_DATA_DIR"
 ENV_OUTPUT_DIR = "AUDIO_SAFETY_OUTPUT_DIR"
 ENV_CACHE_DIR = "AUDIO_SAFETY_CACHE_DIR"
 
-DEFAULT_WORKSPACE = Path("/workspace/audio_safety")
+DEFAULT_WORKSPACE = Path("/workspace/audio_safety_data")
 
 
 @dataclass(frozen=True)

@@ -82,13 +82,18 @@ def render_audio_records(
     """Render harmful/benign pairs for every configured style.
 
     ``dry_run`` writes the same manifest records without invoking the TTS command.
-    This is useful for checking paths on a new cloud instance.
+    If ``batch_command_template`` is configured, pending TTS jobs are written to one
+    JSONL file and rendered with a single long-lived TTS process.
     """
     audio_root = data_dir / tts_cfg.audio_subdir
     records: list[dict[str, object]] = []
+    pending_jobs: list[dict[str, object]] = []
 
-    if not dry_run and not tts_cfg.command_template:
-        raise ValueError("dataset.tts.command_template is required unless dry_run=True")
+    if not dry_run and not (tts_cfg.batch_command_template or tts_cfg.command_template):
+        raise ValueError(
+            "dataset.tts.command_template or dataset.tts.batch_command_template "
+            "is required unless dry_run=True"
+        )
 
     for pair in pairs:
         for safety_label, text in (
@@ -123,6 +128,9 @@ def render_audio_records(
                     status = "exists"
                 elif dry_run:
                     status = "planned"
+                elif tts_cfg.batch_command_template:
+                    pending_jobs.append(values)
+                    status = "queued"
                 else:
                     if command is None:
                         raise ValueError("dataset.tts.command_template is required")
@@ -146,6 +154,29 @@ def render_audio_records(
                         "command": command if dry_run else None,
                     }
                 )
+
+    if pending_jobs:
+        batch_jobs_path = data_dir / tts_cfg.batch_jobs_file
+        batch_values = {
+            "batch_jsonl": str(batch_jobs_path),
+            "batch_jobs_file": str(batch_jobs_path),
+        }
+        save_jsonl(pending_jobs, batch_jobs_path)
+        batch_command = _format_command(tts_cfg.batch_command_template or "", batch_values)
+        subprocess.run(batch_command, check=True, timeout=None)
+        missing = [
+            str(job["output_path"])
+            for job in pending_jobs
+            if not Path(str(job["output_path"])).exists()
+        ]
+        if missing:
+            examples = ", ".join(missing[:3])
+            raise RuntimeError(
+                f"TTS batch command completed but {len(missing)} output files are missing: {examples}"
+            )
+        for record in records:
+            if record["status"] == "queued":
+                record["status"] = "rendered"
 
     save_jsonl(records, data_dir / tts_cfg.manifest_file)
     return records

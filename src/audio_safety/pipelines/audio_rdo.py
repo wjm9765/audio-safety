@@ -205,10 +205,19 @@ def _kl_retain_loss(base_logits: Any, steered_logits: Any) -> Any:
     import torch.nn.functional as F
 
     return F.kl_div(
-        F.log_softmax(steered_logits, dim=-1),
-        F.softmax(base_logits, dim=-1),
+        F.log_softmax(steered_logits.float(), dim=-1),
+        F.softmax(base_logits.float(), dim=-1),
         reduction="batchmean",
     )
+
+
+def _logits_at_token(logits: Any, token_index: int) -> Any:
+    seq_len = int(logits.shape[1])
+    if token_index < 0:
+        token_index = seq_len + token_index
+    if token_index < 0 or token_index >= seq_len:
+        raise IndexError(f"token_index {token_index} is outside sequence length {seq_len}")
+    return logits[:, token_index, :]
 
 
 def train_audio_rdo_axis(
@@ -224,6 +233,7 @@ def train_audio_rdo_axis(
     and labels, while this function only owns the RDO objective.
     """
     import torch
+    from tqdm.auto import trange
 
     if not batches:
         raise ValueError("at least one RDO training batch is required")
@@ -234,13 +244,14 @@ def train_audio_rdo_axis(
     device = _input_device(model)
     r = torch.nn.Parameter(torch.randn(_hidden_size(model), device=device))
     optimizer = torch.optim.Adam([r], lr=cfg.learning_rate)
+    loss_scale = 1.0 / len(batches)
 
-    for _step in range(cfg.train_steps):
+    for _step in trange(cfg.train_steps, desc=f"RDO train L{layer_idx}", unit="step", leave=False):
         optimizer.zero_grad(set_to_none=True)
-        r_unit = r / torch.clamp(torch.linalg.vector_norm(r), min=1e-12)
-        total = torch.zeros((), device=device)
 
         for batch in batches:
+            r_unit = r / torch.clamp(torch.linalg.vector_norm(r), min=1e-12)
+            total = torch.zeros((), device=device)
             add_inputs = _with_labels(batch.add_inputs, batch.add_labels)
             with ResidualStreamIntervention(
                 model,
@@ -271,7 +282,10 @@ def train_audio_rdo_axis(
 
             if batch.retain_inputs is not None and batch.retain_token_index is not None:
                 with torch.no_grad():
-                    base_logits = model(**batch.retain_inputs).logits
+                    base_logits = _logits_at_token(
+                        model(**batch.retain_inputs).logits,
+                        batch.retain_token_index,
+                    ).detach()
                 with ResidualStreamIntervention(
                     model,
                     layer_idx=layer_idx,
@@ -280,14 +294,19 @@ def train_audio_rdo_axis(
                     mode="add",
                     scale=cfg.alpha,
                 ):
-                    steered_logits = model(**batch.retain_inputs).logits
+                    steered_logits = _logits_at_token(
+                        model(**batch.retain_inputs).logits,
+                        batch.retain_token_index,
+                    )
                 total = total + cfg.loss_weights.retain * _kl_retain_loss(
                     base_logits,
                     steered_logits,
                 )
 
-        total.backward()
+            (loss_scale * total).backward()
         optimizer.step()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     r_final = r / torch.clamp(torch.linalg.vector_norm(r), min=1e-12)
     return r_final.detach().float().cpu().numpy()

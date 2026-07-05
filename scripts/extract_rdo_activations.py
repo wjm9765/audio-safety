@@ -30,6 +30,27 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+
+def require_train_artifacts(run_dir: Path, cfg, args: argparse.Namespace) -> None:
+    missing = [
+        path
+        for path in (
+            run_dir / cfg.rdo.selected_site_file,
+            run_dir / cfg.rdo.axis_file,
+            run_dir / cfg.rdo.validation_metrics_file,
+        )
+        if not path.exists()
+    ]
+    if not missing:
+        return
+    missing_list = "\n".join(f"  - {path}" for path in missing)
+    raise SystemExit(
+        "Missing RDO training artifacts. Run train_rdo_axis.py first with the same "
+        f"--run-name.\nMissing:\n{missing_list}\n\n"
+        "Command:\n"
+        f"  ./scripts/train_rdo_axis.py --config {args.config} --run-name {args.run_name}"
+    )
+
 def main() -> None:
     args = parse_args()
     cfg = load_experiment_config(args.config)
@@ -40,6 +61,7 @@ def main() -> None:
         cache_dir=args.cache_dir,
     )
     run_dir = run_output_dir(paths.output_dir, args.run_name)
+    require_train_artifacts(run_dir, cfg, args)
     site = load_selected_site(run_dir / cfg.rdo.selected_site_file)
     rows = load_jsonl(paths.data_dir / cfg.dataset.target_generation.outputs_file)
     pairs = load_audio_rdo_pairs(paths.data_dir, cfg.dataset)

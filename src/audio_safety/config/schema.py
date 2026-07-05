@@ -86,10 +86,14 @@ class TtsConfig(StrictModel):
     ``command_template`` is intentionally deployment-specific. It may reference
     ``{text}``, ``{text_json}``, ``{style}``, ``{output}``/``{output_path}``,
     ``{item_id}``/``{query_id}``, and ``{safety_label}``/``{query_type}``.
+    ``batch_command_template`` may reference ``{batch_jsonl}``/``{batch_jobs_file}``
+    and should load the TTS model once for all pending jobs.
     """
 
     engine: str = "cosyvoice2"
     command_template: str | None = None
+    batch_command_template: str | None = None
+    batch_jobs_file: Path = Path("manifests/audio_rdo_tts_jobs.jsonl")
     audio_subdir: Path = Path("audio")
     manifest_file: Path = Path("manifests/audio_rdo_renders.jsonl")
     overwrite: bool = False
@@ -174,6 +178,7 @@ class AudioRdoConfig(StrictModel):
     train_steps: int = 400
     learning_rate: float = 5e-3
     batch_size: int = 1
+    limit_per_site: int | None = None
     alpha: float = 2.0
     unit_norm: bool = True
     refusal_target: str = "I'm sorry, I can't assist with that."

@@ -152,6 +152,7 @@ def main() -> None:
         )
         from audio_safety.utils.io import load_jsonl, save_json
 
+        limit = args.limit if args.limit is not None else cfg.rdo.limit_per_site
         pairs = load_audio_rdo_pairs(paths.data_dir, cfg.dataset)
         split_map = split_ids(pairs, cfg)
         rows = load_jsonl(paths.data_dir / cfg.dataset.target_generation.outputs_file)
@@ -173,7 +174,7 @@ def main() -> None:
                 cfg,
                 paths.data_dir,
                 site,
-                limit=args.limit,
+                limit=limit,
             )
             all_metrics.append(metrics)
             if best_metrics is None or metrics["score"] > best_metrics["score"]:

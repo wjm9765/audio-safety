@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+from tqdm.auto import tqdm
 
 from audio_safety.config.schema import ExperimentConfig
 from audio_safety.data.datasets import AudioRdoPair, split_audio_rdo_pairs
@@ -302,7 +303,7 @@ def generate_intervention_records(
     target_coordinates: dict[tuple[str, str, str], float] | None = None,
 ) -> list[dict[str, Any]]:
     records = []
-    for row in rows:
+    for row in tqdm(rows, desc=f"{vector_name} {mode}", unit="row", leave=False):
         key = (str(row["item_id"]), str(row["safety_label"]), str(row["style"]))
         target = target_coordinates.get(key) if target_coordinates else None
         output = generate_audio_response_with_intervention(
@@ -371,6 +372,11 @@ def train_and_validate_site(
     *,
     limit: int | None = None,
 ) -> tuple[np.ndarray, dict[str, float]]:
+    print(
+        f"[rdo] site layer={site.layer} position={site.position} "
+        f"limit={limit if limit is not None else 'full'}",
+        flush=True,
+    )
     batches = build_rdo_training_batches(
         model,
         processor,
@@ -380,6 +386,7 @@ def train_and_validate_site(
         site.position,
         limit=limit,
     )
+    print(f"[rdo] built {len(batches)} training batches", flush=True)
     axis = train_audio_rdo_axis(model, batches, layer_idx=site.layer, cfg=cfg.rdo)
     add_rows = [
         row
@@ -583,6 +590,11 @@ def save_axis(path: Path, axis: np.ndarray, site: Site) -> None:
 
 
 def load_axis(path: Path) -> tuple[np.ndarray, Site]:
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Missing RDO axis artifact: {path}. "
+            "Run scripts/train_rdo_axis.py first with the same --run-name."
+        )
     data = np.load(path, allow_pickle=True)
     return data["axis"], Site(layer=int(data["layer"]), position=str(data["position"]))
 
@@ -592,6 +604,11 @@ def save_selected_site(path: Path, site: Site, metrics: dict[str, Any]) -> None:
 
 
 def load_selected_site(path: Path) -> Site:
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Missing selected-site artifact: {path}. "
+            "Run scripts/train_rdo_axis.py first with the same --run-name."
+        )
     data = json.loads(path.read_text())
     return Site(layer=int(data["layer"]), position=str(data["position"]))
 

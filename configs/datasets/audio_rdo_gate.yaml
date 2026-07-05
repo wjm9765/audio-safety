@@ -39,6 +39,7 @@ pair_generation:
 tts:
   engine: cosyvoice2
   command_template: "./scripts/cosyvoice2_tts.py --text-json {text_json} --style {style} --output {output_path}"
+  batch_command_template: "./scripts/cosyvoice2_tts.py --batch-jsonl {batch_jsonl}"
   audio_subdir: audio
   manifest_file: manifests/audio_rdo_renders.jsonl
   overwrite: false
@@ -54,13 +55,12 @@ target_generation:
   max_new_tokens: 64
   outputs_file: manifests/audio_rdo_outputs.jsonl
 
+# Fast initial gate: neutral baseline + one non-neutral style. This keeps
+# style sensitivity measurable while cutting TTS renders from 1800 to 600 for
+# 150 pairs. Broaden this list for the full style sweep after the direction is promising.
 styles:
   - neutral
   - sad
-  - fearful
-  - angry
-  - elderly_male
-  - child_female
 
 transcript_control:
   wer_max: 0.05
