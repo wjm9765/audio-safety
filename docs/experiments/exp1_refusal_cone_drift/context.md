@@ -162,6 +162,59 @@ microbatches, plus limited validation intervention generations. Expected A40
 wall time after model load is roughly 1-2 hours. It is a direction-check config,
 not the paper-facing final run.
 
+### Fast RDO result: `exp1_fast_20260705_0702_audio_rdo_gate`
+
+Run date: 2026-07-05. Implementation commit: `8051c84`.
+
+Selected site:
+
+```text
+layer = 16
+position = first_generation_prelogit
+```
+
+Validation-site selection looked promising on the small fast validation subset:
+
+```text
+add_rr_pp = +20.0
+benign_orr_add_pp = +0.0
+ablation_asr_pp = +10.0
+score = 30.0
+n_add = n_benign = n_ablate = 10
+```
+
+Heldout final gate was `NO-GO` because addition did not clear the preregistered
++20pp refusal-recovery threshold:
+
+```text
+add_rr_pp = +11.8          # below +20pp threshold
+benign_orr_add_pp = +2.6   # within <= +3pp threshold
+ablation_asr_pp = +21.5    # clears +10pp threshold
+rdo_beats_mdsteer_c2r = true
+rdo_beats_sarsteer_text = true
+```
+
+Interpretation:
+
+- The run is not a paper-facing GO. The final decision is `NO-GO` because the
+  heldout addition effect is too weak.
+- It is not a dead result. The ablation effect is strong and benign ORR remains
+  controlled, which suggests the selected direction is related to refusal rather
+  than being a generic refusal-everything vector.
+- RDO beats the implemented MDSteer-c2r and SARSteer-style text baselines at the
+  observed benign ORR level, but the absolute RDO addition effect is still below
+  the gate.
+- The current two-style setup does not support a style-escape claim. Heldout
+  neutral vs sad behavior is nearly flat (`genuine_style_gap_pp = -1.7`), escape
+  metrics are weak (`Spearman = 0.097`, `AUROC = 0.556`), and coordinate
+  restoration does not recover refusal (`restoration_rr_pp = 0.0`).
+
+Working conclusion: weak positive for an audio-RDO refusal direction, negative
+for the full gate and negative for the current style-escape/restoration claim.
+The next practical run should thicken the layer-16 neighborhood before attempting
+the full 12-site sweep, for example layers `[14, 16, 18, 20]`,
+`first_generation_prelogit`, `train_steps=100..150`, and `limit_per_site=20..30`.
+
 ## Current Implementation Status
 
 Current server-oriented implementation snapshot, 2026-07-05:
@@ -214,7 +267,7 @@ Current local verification after the A40 RDO memory fix:
 
 ```bash
 uv run pytest
-# 51 passed
+# 52 passed
 ```
 
 A one-site GPU smoke run with `train_steps=1`, `limit=1`, layer 8, and
