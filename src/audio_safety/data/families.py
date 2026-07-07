@@ -278,6 +278,7 @@ def render_audio_records(
                     "query_id": pair.item_id,
                     "safety_label": safety_label,
                     "query_type": safety_label,
+                    "overwrite": "true" if tts_cfg.overwrite else "false",
                 }
                 command = (
                     _format_command(tts_cfg.command_template, values)

@@ -52,6 +52,7 @@ def parse_args() -> argparse.Namespace:
         help="override CosyVoice instruct2 style prompt; batch jobs may set style_instruction",
     )
     parser.add_argument("--output", type=Path, default=None, help="wav output path")
+    parser.add_argument("--overwrite", action="store_true", help="overwrite existing wav files")
     parser.add_argument("--setup-only", action="store_true", help="bootstrap CosyVoice2 and exit")
     parser.add_argument("--cache-dir", type=Path, default=None, help="override TTS cache root")
     parser.add_argument("--repo-dir", type=Path, default=None, help="override CosyVoice repo path")
@@ -208,6 +209,15 @@ def load_batch_jobs(path: Path) -> list[dict[str, Any]]:
         return [json.loads(line) for line in f if line.strip()]
 
 
+def job_overwrite(job: dict[str, Any], args: argparse.Namespace) -> bool:
+    value = job.get("overwrite", args.overwrite)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y"}
+    return bool(value)
+
+
 def prepare_renderer(args: argparse.Namespace):
     _root, repo_dir, _venv_dir, model_dir = paths(args)
     ensure_model(model_dir, args.model_id)
@@ -254,6 +264,9 @@ def render(args: argparse.Namespace) -> None:
     output = args.output
     if output is None:
         raise ValueError("--output is required unless --setup-only or --batch-jsonl is used")
+    if output.exists() and not args.overwrite:
+        print(f"[cosyvoice2] exists {output}", flush=True)
+        return
     torch, torchaudio, model, prompt_audio = prepare_renderer(args)
     synthesize_to_file(
         torch=torch,
@@ -287,7 +300,7 @@ def render_batch(args: argparse.Namespace) -> None:
             style_instruction = str(style_instruction)
         item_id = str(job.get("item_id") or job.get("query_id") or output.stem)
         safety_label = str(job.get("safety_label") or job.get("query_type") or "unknown")
-        if output.exists():
+        if output.exists() and not job_overwrite(job, args):
             print(f"[cosyvoice2] batch {index}/{total} exists {output}", flush=True)
             continue
         print(
