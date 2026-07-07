@@ -450,26 +450,52 @@ human-agreement subset (not keyword-based refusal detection); add >=1 additional
 LALM or an explicit scoping argument; validate TTS against real speech; report
 benign over-refusal explicitly.
 
-### Next-action plan (agreed direction, not yet executed)
+### Operator fix implemented (commit `57ded59`, 2026-07-07)
 
-1. **Highest-leverage fix — intervention scope.** Change addition/ablation to
-   apply at **all generated token positions** (make the hook survive KV-cached
-   decode steps), match train and eval intervention scope, and sweep alpha at
-   the natural refusal-coordinate / DIM-norm scale instead of a fixed 2.0 on a
-   unit vector. Add an Arditi-style coordinate-clamp (`h <- h - (h.u)u + c u`)
-   variant. Report single-position vs all-position side by side so the
-   intervention-breadth characterization becomes a contribution rather than a
-   silent fix.
-2. **Style set.** Replace {neutral, sad} with StyleBreak-effective styles
+The all-token intervention operator is now in code, so the rebuttal run below is
+ready to execute (code done; GPU run pending).
+
+- `models/hooks.py`: `ResidualStreamIntervention` gained an `all_positions` flag
+  and a shared `_edit()` operator that works on `(batch, d)` and `(batch, T, d)`.
+  When `all_positions=True` the edit is applied at every position of every forward
+  pass, including each length-1 KV-cached decode step, so addition/ablation
+  persist across generated tokens instead of washing out.
+- `pipelines/audio_rdo.py`: RDO training applies add/ablate/retain in the same
+  scope, so the axis is optimized in the regime it is evaluated in (removes the
+  single-position-train / rollout-eval mismatch).
+- `pipelines/rdo_gate.py` + `models/qwen2_audio.py`: evaluation generation threads
+  the scope through. **Restoration (`set_coordinate`, H4) is pinned to
+  single-position regardless of the flag** — its target is one neutral-occupancy
+  scalar at the readout position, so an all-position clamp would be a different,
+  stronger operator and would corrupt `restoration_rr_pp` / `restored_fraction`
+  (§0 GO thresholds). This was caught by research-code-reviewer.
+- `config/schema.py` + both experiment configs: `rdo.intervention_all_positions`
+  (default `true`; set `false` to reproduce the legacy single-position operator
+  for the side-by-side comparison).
+- `design.md §10`: records the §5 operator correction. §0 thresholds and H1–H4
+  unchanged. `uv run pytest` = 58 passed (6 new hook tests).
+- Not yet done from the plan: alpha sweep / explicit Arditi coordinate-clamp
+  variant (all-position addition already multiplies the effective steering norm,
+  so a fixed alpha may now suffice); the style-set swap; the GPU rebuttal run
+  itself; and the `/codex-cross-check` + adversarial-reviewer gate on the numbers.
+
+### Next-action plan (status after the operator fix)
+
+1. **[DONE] Highest-leverage fix — intervention scope.** Addition/ablation now
+   apply at all generated token positions with train/eval scope matched
+   (commit `57ded59`). Still open: sweep alpha at the natural
+   refusal-coordinate / DIM-norm scale, and report single-position vs
+   all-position side by side so intervention breadth becomes a contribution.
+2. **[TODO] Style set.** Replace {neutral, sad} with StyleBreak-effective styles
    (child_female / elderly_male / fearful) to first establish a genuine
    neutral-vs-style behavior gap before re-testing restoration (H4).
-3. **Process gate before re-running.** research-code-reviewer on the hook change
-   -> `uv run pytest` -> `/codex-cross-check` on the numbers ->
-   adversarial-reviewer, per the CLAUDE.md workflow.
-4. **Preregistration integrity.** The intervention-operator change is a §5
-   *operator-definition* correction (align with literature all-position
-   standard), not a §0 threshold change. Record it in design.md's change log and
-   report both operator variants. §0 GO/NO-GO thresholds remain untouched.
+3. **[PARTIAL] Process gate before re-running.** research-code-reviewer on the
+   hook change is DONE (found + fixed the restoration-scope bug) and
+   `uv run pytest` passes; `/codex-cross-check` on the numbers and
+   adversarial-reviewer still pending after the rerun, per the CLAUDE.md workflow.
+4. **[DONE] Preregistration integrity.** The §5 operator-definition correction is
+   recorded in design.md's change log; §0 GO/NO-GO thresholds remain untouched.
+   The run must still report both operator variants.
 
 ### Next run is a direct rebuttal of the fast-run NO-GO
 
