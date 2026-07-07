@@ -479,6 +479,57 @@ ready to execute (code done; GPU run pending).
   so a fixed alpha may now suffice); the style-set swap; the GPU rebuttal run
   itself; and the `/codex-cross-check` + adversarial-reviewer gate on the numbers.
 
+### Rebuttal run commands (A40, 2026-07-07)
+
+Preconditions: 3-style (neutral/sad/angry) behavior outputs already cover the
+train and validation splits — `train_rdo_axis.py` exits early otherwise — and the
+GPU cache env vars are set per AGENTS.md. Overrides MUST be quoted: a bare
+`hidden.layers=[14,16,18,20]` is a zsh glob and dies with `no matches found`
+before the model loads.
+
+CPU sanity (no GPU): `uv run pytest` (58 passed) confirms the operator fix.
+
+```bash
+export PYTORCH_ALLOC_CONF=expandable_segments:True
+export RUN_NAME=exp1_$(date +%Y%m%d_%H%M)_allpos_rebuttal
+```
+
+Smoke (fast defaults + all-position operator, ~1-2h, train only). Reads
+validation add_rr_pp / benign_orr_add_pp cheaply to confirm direction and detect
+over-steering before committing to the full run:
+
+```bash
+./scripts/train_rdo_axis.py \
+  --config configs/experiments/exp1_refusal_cone_drift_fast.yaml \
+  --run-name "${RUN_NAME}_smoke"
+```
+
+Full rebuttal (layer-16 neighborhood, overnight; train -> extract -> evaluate to
+the heldout gate and the RDO-vs-MDSteer matched-ORR comparison). extract/evaluate
+read the selected site from artifacts, so they need only `--config` + `--run-name`:
+
+```bash
+nohup bash -c '
+./scripts/train_rdo_axis.py \
+  --config configs/experiments/exp1_refusal_cone_drift_fast.yaml \
+  --override "hidden.layers=[14,16,18,20]" \
+  --override "rdo.train_steps=100" \
+  --override "rdo.limit_per_site=20" \
+  --run-name "$RUN_NAME" \
+&& ./scripts/extract_rdo_activations.py \
+  --config configs/experiments/exp1_refusal_cone_drift_fast.yaml \
+  --run-name "$RUN_NAME" \
+&& ./scripts/evaluate_rdo_gate.py \
+  --config configs/experiments/exp1_refusal_cone_drift_fast.yaml \
+  --run-name "$RUN_NAME"
+' > "outputs/${RUN_NAME}.log" 2>&1 &
+```
+
+Over-steering watch: with all-position addition, `alpha=2.0` is now applied at
+every position and may OVER-steer (the failure mode flips from too-weak to
+too-strong). If `benign_orr_add_pp` spikes or `decoding_failure_share` rises,
+LOWER alpha (`--override rdo.alpha=1.0` or `0.5`), do not raise it.
+
 ### Next-action plan (status after the operator fix)
 
 1. **[DONE] Highest-leverage fix — intervention scope.** Addition/ablation now
