@@ -346,6 +346,7 @@ def generate_audio_response_with_intervention(
     mode: str,
     scale: float = 1.0,
     target_coordinate: float | Any | None = None,
+    all_positions: bool = False,
     max_new_tokens: int = 128,
     system_prompt: str = "You are a helpful assistant.",
 ) -> str:
@@ -354,7 +355,11 @@ def generate_audio_response_with_intervention(
         instruction,
         system_prompt=system_prompt,
     )
-    token_index = resolve_audio_position_indices(processor, conversation)[position_name]
+    token_index = (
+        None
+        if all_positions
+        else resolve_audio_position_indices(processor, conversation)[position_name]
+    )
     device = model_input_device(model)
     inputs = prepare_qwen2_audio_inputs(processor, conversation, device=device)
     prompt_len = inputs.input_ids.shape[1]
@@ -366,6 +371,7 @@ def generate_audio_response_with_intervention(
         mode=mode,
         scale=scale,
         target_coordinate=target_coordinate,
+        all_positions=all_positions,
     ):
         generate_ids = model.generate(**inputs, max_new_tokens=max_new_tokens)
     generate_ids = generate_ids[:, prompt_len:]

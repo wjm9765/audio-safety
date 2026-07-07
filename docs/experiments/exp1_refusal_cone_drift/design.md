@@ -543,3 +543,4 @@ style -> refusal axis occupancy -> refusal/compliance
 ## 10. 변경 이력
 
 - 2026-07-05: 기존 "Audio-Induced Refusal-Cone Drift Probe" 사전등록을 폐기하고, 첫 gate를 "Audio-RDO Refusal Axis Existence Gate"로 교체. 사유: multi-cone/style-defense claim 이전에 SARSteer negative result를 직접 넘는 audio-conditioned refusal axis 존재 여부를 먼저 판별해야 함.
+- 2026-07-07: §5 intervention 연산자를 단일 prefill token 위치에서 **all-token 위치(prefill + 모든 KV-cache decode step)**로 정정하고, RDO 학습·평가가 동일 scope를 공유하도록 함(config: `rdo.intervention_all_positions`, 기본 true). 사유: 기존 단일-위치 연산자는 KV-cache decode step에서 no-op가 되어 addition 효과가 생성 도중 소실됐고, 이는 Arditi 2024 / RDO(Wollschläger 2025)를 포함한 모든 steering 문헌의 all-token 표준과 어긋난다. `intervention_all_positions: false`로 legacy 단일-위치 연산자를 재현해 single vs all-position 비교를 보고한다. **§0 판정 임계값과 가설(H1–H4)은 변경하지 않는다.** 이 정정은 fast-run NO-GO(`exp1_fast_20260705_0702`, `exp1_20260707_0633_style_rewrite_fast_a5000`)의 addition 약세가 연산자 artifact인지 검증하기 위한 것이다.

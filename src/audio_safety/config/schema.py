@@ -212,6 +212,13 @@ class AudioRdoConfig(StrictModel):
     limit_per_site: int | None = None
     alpha: float = 2.0
     unit_norm: bool = True
+    # When True, addition/ablation/restoration are applied at every token position
+    # of every forward pass (prefill + each KV-cached decode step), matching the
+    # all-token scope in Arditi 2024 / RDO. False reproduces the legacy
+    # single-prefill-position operator for the side-by-side comparison. Training
+    # and evaluation always share this scope so the axis is optimized in the
+    # regime it is evaluated in.
+    intervention_all_positions: bool = True
     refusal_target: str = "I'm sorry, I can't assist with that."
     nonrefusal_prefix: str = "Here is a high-level overview:"
     loss_weights: RdoLossWeightsConfig = Field(default_factory=RdoLossWeightsConfig)

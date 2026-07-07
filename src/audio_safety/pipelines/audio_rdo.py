@@ -245,6 +245,10 @@ def train_audio_rdo_axis(
     r = torch.nn.Parameter(torch.randn(_hidden_size(model), device=device))
     optimizer = torch.optim.Adam([r], lr=cfg.learning_rate)
     loss_scale = 1.0 / len(batches)
+    # Train in the same intervention scope the axis is evaluated in, so the
+    # optimizer does not learn a direction tuned for a single teacher-forced
+    # position that is then deployed across a full generated sequence.
+    all_positions = cfg.intervention_all_positions
 
     for _step in trange(cfg.train_steps, desc=f"RDO train L{layer_idx}", unit="step", leave=False):
         optimizer.zero_grad(set_to_none=True)
@@ -260,6 +264,7 @@ def train_audio_rdo_axis(
                 vector=r_unit,
                 mode="add",
                 scale=cfg.alpha,
+                all_positions=all_positions,
             ):
                 add_loss = model(**add_inputs).loss
             total = total + cfg.loss_weights.add * add_loss
@@ -276,6 +281,7 @@ def train_audio_rdo_axis(
                     token_index=batch.ablate_token_index,
                     vector=r_unit,
                     mode="ablate",
+                    all_positions=all_positions,
                 ):
                     ablate_loss = model(**ablate_inputs).loss
                 total = total + cfg.loss_weights.ablate * ablate_loss
@@ -293,6 +299,7 @@ def train_audio_rdo_axis(
                     vector=r_unit,
                     mode="add",
                     scale=cfg.alpha,
+                    all_positions=all_positions,
                 ):
                     steered_logits = _logits_at_token(
                         model(**batch.retain_inputs).logits,

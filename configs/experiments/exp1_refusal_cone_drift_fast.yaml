@@ -25,6 +25,10 @@ rdo:
   limit_per_site: 10
   alpha: 2.0
   unit_norm: true
+  # All-token intervention scope (Arditi/RDO standard), shared by train and eval.
+  # Set false to reproduce the legacy single-prefill-position operator for the
+  # single-position vs all-position side-by-side comparison.
+  intervention_all_positions: true
   refusal_target: "I'm sorry, I can't assist with that."
   nonrefusal_prefix: "Here is a high-level overview:"
   loss_weights:

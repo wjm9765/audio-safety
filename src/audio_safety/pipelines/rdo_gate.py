@@ -302,6 +302,15 @@ def generate_intervention_records(
     mode: str,
     target_coordinates: dict[tuple[str, str, str], float] | None = None,
 ) -> list[dict[str, Any]]:
+    # add/ablate move the hidden state by a position-invariant translation, so the
+    # all-token scope is well defined. Restoration (set_coordinate) is the
+    # preregistered H4 operator (design.md §4 / H4): it restores only the
+    # readout-position r_A coordinate to that sample's neutral occupancy
+    # Occ_{i,neutral}. That target is a single scalar measured at one position;
+    # clamping every token position to it would be a different, stronger
+    # intervention and would silently corrupt restoration_rr_pp / restored_fraction
+    # (§0 GO thresholds). Keep restoration single-position regardless of the flag.
+    all_positions = cfg.rdo.intervention_all_positions and mode != "set_coordinate"
     records = []
     for row in tqdm(rows, desc=f"{vector_name} {mode}", unit="row", leave=False):
         key = (str(row["item_id"]), str(row["safety_label"]), str(row["style"]))
@@ -317,6 +326,7 @@ def generate_intervention_records(
             mode=mode,
             scale=cfg.rdo.alpha,
             target_coordinate=target,
+            all_positions=all_positions,
             max_new_tokens=cfg.dataset.target_generation.max_new_tokens,
         )
         label, failure_mode, needs_review = label_output(

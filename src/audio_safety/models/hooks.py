@@ -118,13 +118,24 @@ class ResidualStreamCapture:
 
 
 class ResidualStreamIntervention:
-    """Context manager applying a single residual-stream intervention.
+    """Context manager applying a residual-stream intervention.
 
     Modes:
     - ``add``: h[p] <- h[p] + scale * unit(vector)
     - ``ablate``: h[p] <- h[p] - <h[p], unit(vector)> unit(vector)
     - ``set_coordinate``: h[p] is moved only along vector so its signed coordinate
       equals ``target_coordinate``.
+
+    Scope:
+    - default (``all_positions=False``): intervene only at the single residual
+      position ``token_index``. During KV-cached generation this edits only the
+      prefill pass, so the perturbation reaches later generated tokens indirectly
+      through attention and can wash out.
+    - ``all_positions=True``: intervene at every position of every forward pass,
+      including each length-1 KV-cached decode step, so the edit persists across
+      all generated tokens. ``token_index`` is ignored in this mode. This matches
+      the all-token activation-addition / directional-ablation scope used by
+      Arditi et al. 2024 and RDO (Wollschlaeger et al. 2025).
 
     The vector may be a trainable torch tensor; it is intentionally not detached.
     """
@@ -134,15 +145,18 @@ class ResidualStreamIntervention:
         model: Any,
         *,
         layer_idx: int,
-        token_index: int,
+        token_index: int | None = None,
         vector: Any,
         mode: str,
         scale: float = 1.0,
         target_coordinate: float | Any | None = None,
+        all_positions: bool = False,
         eps: float = 1e-12,
     ):
         if mode not in {"add", "ablate", "set_coordinate"}:
             raise ValueError(f"unsupported intervention mode {mode!r}")
+        if not all_positions and token_index is None:
+            raise ValueError("token_index is required unless all_positions is True")
         self._layer = get_decoder_layers(model)[layer_idx]
         self._layer_idx = layer_idx
         self._token_index = token_index
@@ -150,18 +164,48 @@ class ResidualStreamIntervention:
         self._mode = mode
         self._scale = scale
         self._target_coordinate = target_coordinate
+        self._all_positions = all_positions
         self._eps = eps
         self._handle: Any | None = None
+
+    def _edit(self, current: Any, vector: Any) -> Any:
+        """Apply the mode's operator along the last (d_model) dim of ``current``.
+
+        ``current`` may be ``(batch, d)`` for a single position or ``(batch, T, d)``
+        for the all-positions scope; ``current @ vector`` collapses the last dim in
+        both cases.
+        """
+        import torch
+
+        if self._mode == "add":
+            return current + self._scale * vector
+        if self._mode == "ablate":
+            coord = current @ vector
+            return current - coord.unsqueeze(-1) * vector
+
+        if self._target_coordinate is None:
+            raise ValueError("target_coordinate is required for set_coordinate")
+        target = self._target_coordinate
+        if not torch.is_tensor(target):
+            target = torch.tensor(target, device=current.device, dtype=current.dtype)
+        else:
+            target = target.to(device=current.device, dtype=current.dtype)
+        target = target.reshape(-1)
+        coord = current @ vector
+        # A per-row target is only meaningful for the (batch, d) single-position
+        # case; broadcasting it across an all-positions (batch, T) coord would be
+        # ambiguous, so reject it explicitly rather than steer silently wrong.
+        if target.numel() != 1 and (current.ndim != 2 or target.shape[0] != current.shape[0]):
+            raise ValueError(
+                "target_coordinate must be scalar or match batch size "
+                f"{current.shape[0]}, got {tuple(target.shape)}"
+            )
+        return current + (target - coord).unsqueeze(-1) * vector
 
     def _hook(self, module: Any, inputs: Any, output: Any) -> Any:
         import torch
 
         hidden = output[0] if isinstance(output, tuple) else output
-        token_index = self._token_index
-        if token_index < 0:
-            token_index = hidden.shape[1] + token_index
-        if token_index < 0 or token_index >= hidden.shape[1]:
-            return output
 
         if torch.is_tensor(self._vector):
             vector = self._vector.to(device=hidden.device, dtype=hidden.dtype)
@@ -169,31 +213,18 @@ class ResidualStreamIntervention:
             vector = torch.as_tensor(self._vector, device=hidden.device, dtype=hidden.dtype)
         vector = vector / torch.clamp(torch.linalg.vector_norm(vector), min=self._eps)
 
-        current = hidden[:, token_index, :]
+        if self._all_positions:
+            edited = self._edit(hidden, vector)
+            return _replace_hidden_output(output, edited)
 
-        if self._mode == "add":
-            replacement = current + self._scale * vector
-        elif self._mode == "ablate":
-            coord = current @ vector
-            replacement = current - coord.unsqueeze(-1) * vector
-        else:
-            if self._target_coordinate is None:
-                raise ValueError("target_coordinate is required for set_coordinate")
-            target = self._target_coordinate
-            if not torch.is_tensor(target):
-                target = torch.tensor(target, device=hidden.device, dtype=hidden.dtype)
-            else:
-                target = target.to(device=hidden.device, dtype=hidden.dtype)
-            target = target.reshape(-1)
-            if target.numel() == 1:
-                target = target.expand(current.shape[0])
-            if target.shape[0] != current.shape[0]:
-                raise ValueError(
-                    "target_coordinate must be scalar or match batch size "
-                    f"{current.shape[0]}, got {target.shape[0]}"
-                )
-            coord = current @ vector
-            replacement = current + (target - coord).unsqueeze(-1) * vector
+        token_index = self._token_index
+        if token_index < 0:
+            token_index = hidden.shape[1] + token_index
+        if token_index < 0 or token_index >= hidden.shape[1]:
+            return output
+
+        current = hidden[:, token_index, :]
+        replacement = self._edit(current, vector)
 
         token_mask = torch.nn.functional.one_hot(
             torch.tensor(token_index, device=hidden.device),
