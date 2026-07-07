@@ -26,14 +26,14 @@ This replaces the earlier "multi-cone drift first" plan. Cone geometry, token-aw
 Requires [uv](https://docs.astral.sh/uv/).
 
 ```bash
-uv sync               # base + dev (CPU-only: config/stats/tests)
-uv sync --group gpu   # + torch/transformers/librosa for Qwen2-Audio
+uv sync
 ```
 
-The `gpu` dependency group is pinned for the current RunPod A40 target:
-`torch==2.9.1` and `torchaudio==2.9.1` are resolved from the official PyTorch
-CUDA 12.8 wheel index (`cu128`). Do not loosen this to CUDA 13 wheels unless the
-server NVIDIA driver is upgraded accordingly.
+The default `uv sync` installs the dev and GPU dependency groups. The `gpu`
+dependency group is pinned for the current RunPod A40 target: `torch==2.9.1` and
+`torchaudio==2.9.1` are resolved from the official PyTorch CUDA 12.8 wheel index
+(`cu128`). Do not loosen this to CUDA 13 wheels unless the server NVIDIA driver
+is upgraded accordingly.
 
 On a GPU server, point caches at a persistent workspace:
 
@@ -87,8 +87,8 @@ export OPENROUTER_API_KEY=<your_key>
 
 # The default renderer uses scripts/cosyvoice2_tts.py in batch mode. It loads
 # CosyVoice2 once, then renders all pending jobs from a JSONL queue under
-# AUDIO_SAFETY_DATA_DIR/manifests/. The current fast gate uses two styles
-# (neutral, sad): 150 pairs x harmful/benign x 2 styles = 600 wav files.
+# AUDIO_SAFETY_DATA_DIR/manifests/. The current fast gate uses three styles
+# (neutral, sad, angry): 150 pairs x harmful/benign x 3 styles = 900 wav files.
 ./scripts/render_audio_rdo.py \
   --config configs/experiments/exp1_refusal_cone_drift.yaml
 
@@ -126,32 +126,47 @@ extract_activations, style_escape, restoration, stats
 
 `all` is intentionally not wired; run stages explicitly so failures are resumable.
 
-## Fast RDO Direction Check
+## Fast All-Position Rebuttal Check
 
-For the first A40 direction check, use the permanent fast config instead of a
-temporary YAML. It keeps the same data/model setup but reduces the RDO sweep to
-3 candidate sites, 50 train steps, and 10 train/validation rows per site. Expected
-wall time after Qwen2-Audio loads is roughly 1-2 hours on the current A40 setup.
+Use the permanent fast config for the current all-position intervention rebuttal
+check. Preconditions: behavior outputs already cover the 3-style train and
+validation splits. The smoke run trains only and writes validation metrics; the
+overnight run trains, extracts activations/baselines, evaluates heldout
+interventions, and writes the final gate metrics.
 
 ```bash
 export PYTORCH_ALLOC_CONF=expandable_segments:True
-export CONFIG=configs/experiments/exp1_refusal_cone_drift_fast.yaml
-export RUN_NAME=exp1_fast_$(date +%Y%m%d_%H%M)_audio_rdo_gate
+export RUN_NAME=exp1_$(date +%Y%m%d_%H%M)_allpos_rebuttal
 
+# Smoke: cheap direction and over-steering check, train only.
 ./scripts/train_rdo_axis.py \
-  --config "$CONFIG" \
-  --run-name "$RUN_NAME"
+  --config configs/experiments/exp1_refusal_cone_drift_fast.yaml \
+  --run-name "${RUN_NAME}_smoke"
 
-./scripts/extract_rdo_activations.py \
-  --config "$CONFIG" \
+# Overnight: layer-16 neighborhood, train -> extract -> evaluate.
+nohup bash -c '
+./scripts/train_rdo_axis.py \
+  --config configs/experiments/exp1_refusal_cone_drift_fast.yaml \
+  --override "hidden.layers=[14,16,18,20]" \
+  --override "rdo.train_steps=100" \
+  --override "rdo.limit_per_site=20" \
+  --run-name "$RUN_NAME" \
+&& ./scripts/extract_rdo_activations.py \
+  --config configs/experiments/exp1_refusal_cone_drift_fast.yaml \
+  --run-name "$RUN_NAME" \
+&& ./scripts/evaluate_rdo_gate.py \
+  --config configs/experiments/exp1_refusal_cone_drift_fast.yaml \
   --run-name "$RUN_NAME"
+' > "outputs/${RUN_NAME}.log" 2>&1 &
 
-./scripts/evaluate_rdo_gate.py \
-  --config "$CONFIG" \
-  --run-name "$RUN_NAME"
-
-cat /workspace/audio_safety_data/outputs/$RUN_NAME/metrics.json
+tail -f "outputs/${RUN_NAME}.log"
+cat "/workspace/audio_safety_data/outputs/${RUN_NAME}/metrics.json"
 ```
+
+Always quote list overrides such as `"hidden.layers=[14,16,18,20]"`, especially
+under zsh. With all-position intervention, `alpha=2.0` may over-steer; if benign
+ORR or decoding failures spike, lower alpha with a matching train/eval override
+such as `--override rdo.alpha=1.0` or `--override rdo.alpha=0.5`.
 
 Use `configs/experiments/exp1_refusal_cone_drift.yaml` for the full paper-facing
 run after the fast config gives a promising signal.

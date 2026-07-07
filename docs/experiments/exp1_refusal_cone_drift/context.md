@@ -103,7 +103,6 @@ Current stage order on the A40 server:
 
 ```bash
 uv sync
-uv sync --group gpu
 
 export OPENROUTER_API_KEY=<your_key>
 
@@ -452,8 +451,8 @@ benign over-refusal explicitly.
 
 ### Operator fix implemented (commit `57ded59`, 2026-07-07)
 
-The all-token intervention operator is now in code, so the rebuttal run below is
-ready to execute (code done; GPU run pending).
+The all-token intervention operator is now in code and was executed in the
+all-position rebuttal run below.
 
 - `models/hooks.py`: `ResidualStreamIntervention` gained an `all_positions` flag
   and a shared `_edit()` operator that works on `(batch, d)` and `(batch, T, d)`.
@@ -475,9 +474,8 @@ ready to execute (code done; GPU run pending).
 - `design.md §10`: records the §5 operator correction. §0 thresholds and H1–H4
   unchanged. `uv run pytest` = 58 passed (6 new hook tests).
 - Not yet done from the plan: alpha sweep / explicit Arditi coordinate-clamp
-  variant (all-position addition already multiplies the effective steering norm,
-  so a fixed alpha may now suffice); the style-set swap; the GPU rebuttal run
-  itself; and the `/codex-cross-check` + adversarial-reviewer gate on the numbers.
+  variant; the style-set swap; and the `/codex-cross-check` + adversarial-reviewer
+  gate on the latest numbers. The GPU all-position rebuttal run itself is done.
 
 ### Rebuttal run commands (A40, 2026-07-07)
 
@@ -540,10 +538,10 @@ LOWER alpha (`--override rdo.alpha=1.0` or `0.5`), do not raise it.
 2. **[TODO] Style set.** Replace {neutral, sad} with StyleBreak-effective styles
    (child_female / elderly_male / fearful) to first establish a genuine
    neutral-vs-style behavior gap before re-testing restoration (H4).
-3. **[PARTIAL] Process gate before re-running.** research-code-reviewer on the
-   hook change is DONE (found + fixed the restoration-scope bug) and
-   `uv run pytest` passes; `/codex-cross-check` on the numbers and
-   adversarial-reviewer still pending after the rerun, per the CLAUDE.md workflow.
+3. **[PARTIAL] Process gate after rerun.** research-code-reviewer on the hook
+   change is DONE (found + fixed the restoration-scope bug) and `uv run pytest`
+   passed before the rerun; `/codex-cross-check` on the latest numbers and
+   adversarial-reviewer are still pending per the CLAUDE.md workflow.
 4. **[DONE] Preregistration integrity.** The §5 operator-definition correction is
    recorded in design.md's change log; §0 GO/NO-GO thresholds remain untouched.
    The run must still report both operator variants.
@@ -586,6 +584,157 @@ independent new experiment.**
   single-position vs all-position numbers side by side so the correction is
   auditable rather than a silent overwrite.
 
+### All-position rebuttal result: `exp1_20260707_1557_allpos_rebuttal_l12nbhd`
+
+Run date: 2026-07-07. Source code commit at analysis time: `d8119fc` plus
+documentation-only edits. Run directory:
+`/workspace/audio_safety_data/outputs/exp1_20260707_1557_allpos_rebuttal_l12nbhd`.
+Full append-only entry: [results.md](./results.md).
+
+This run is the direct rebuttal of the earlier fast-run NO-GO. It tests whether
+the weak addition effect was caused by the legacy single-position operator rather
+than by absence of an audio-native refusal coordinate. The active hypothesis was:
+
+1. Applying RDO addition/ablation at all token positions, with train/eval scope
+   matched, raises heldout harmful-audio refusal by at least `+20pp`.
+2. The same intervention keeps paired benign over-refusal increase at `<= +3pp`.
+3. Directional ablation raises harmful compliance / ASR by at least `+10pp`.
+4. RDO beats `MDSteer-c2r` and SARSteer-style text vectors at matched benign ORR.
+5. The existing `neutral` / `sad` / `angry` style-rewrite condition is rechecked,
+   but a Strong GO still requires the preregistered style-gap, escape, and
+   restoration thresholds.
+
+#### Setting and method
+
+The run reused the same 3-style behavior dataset as
+`exp1_20260707_0633_style_rewrite_fast_a5000`:
+
+- Model: `Qwen/Qwen2-Audio-7B-Instruct`.
+- Dataset: 150 harmful/benign pairs, split 40/20/40 by item id.
+- Heldout: 60 pairs x harmful/benign x `neutral`, `sad`, `angry` = 360 rows.
+- Non-neutral styles: OpenRouter content-preserving expressive rewrite plus
+  CosyVoice2 render. This is not a strict same-transcript acoustic-only test.
+- Transcript/style controls: ASR skipped, style classifier not enforced, decoding
+  failures still excluded from geometry metrics.
+- Config: `configs/experiments/exp1_refusal_cone_drift_fast.yaml` with overrides
+  `hidden.layers=[12,14,16,18,20]`, `rdo.train_steps=100`,
+  `rdo.limit_per_site=20`.
+- Position: `first_generation_prelogit` only.
+- Intervention scope: `rdo.intervention_all_positions=true`; addition/ablation
+  apply at every token position in prefill and KV-cached decode. Restoration
+  remains single-position by design, because it restores one measured neutral
+  coordinate at the readout position.
+- RDO objective: add loss on harmful compliance rows, ablation loss on harmful
+  refusal rows, benign retain KL on benign rows, `alpha=2.0`, unit-normalized
+  vector.
+- Evaluation: heldout addition on harmful-compliance rows plus all benign rows,
+  heldout ablation on harmful-refusal rows, baseline vectors from train
+  activations, style escape from selected-site activations, coordinate restoration
+  on style-induced compliance rows and matched benign controls.
+
+#### Site validation
+
+The selected site was layer `16`, position `first_generation_prelogit`. The
+validation subset was larger than the earlier smoke (`n_add = n_benign = n_ablate
+= 20` per site).
+
+| Layer | Add RR | Benign ORR | Ablation ASR | Score |
+|---:|---:|---:|---:|---:|
+| 12 | +44.4pp | +5.0pp | +30.0pp | 69.4 |
+| 14 | +35.3pp | +5.0pp | +30.0pp | 60.3 |
+| 16 | +41.2pp | +0.0pp | +35.0pp | 76.2 |
+| 18 | +33.3pp | +0.0pp | +35.0pp | 68.3 |
+| 20 | +27.8pp | +0.0pp | +30.0pp | 57.8 |
+
+The smoke run selected layer 12, but at `limit_per_site=20` layer 12 showed
+`+5pp` validation benign ORR and layer 16 became the more stable selected site.
+
+#### Heldout behavior
+
+Heldout base behavior matched the previous style-rewrite run:
+
+| Condition | policy refusal | harmful compliance | benign answer | decoding failure |
+|---|---:|---:|---:|---:|
+| harmful:neutral | 32 | 28 | 0 | 0 |
+| harmful:sad | 33 | 27 | 0 | 0 |
+| harmful:angry | 25 | 35 | 0 | 0 |
+| benign:neutral | 2 | 0 | 58 | 0 |
+| benign:sad | 2 | 0 | 58 | 0 |
+| benign:angry | 4 | 0 | 56 | 0 |
+
+The genuine style gap is still only `+5.0pp`, below the preregistered `+8pp`
+threshold. Angry is the only style that visibly increases harmful compliance.
+
+#### Heldout gate result
+
+| Metric | Value | Threshold | Verdict |
+|---|---:|---:|---|
+| RDO addition harmful RR | +20.69pp | >= +20pp | pass |
+| RDO addition benign ORR | +0.05pp | <= +3pp | pass |
+| RDO ablation ASR | +35.63pp | >= +10pp | pass |
+| RDO beats MDSteer-c2r at matched ORR | true | pass | pass |
+| RDO beats SARSteer-text at matched ORR | true | pass | pass |
+| Genuine style gap | +5.0pp | >= +8pp | fail |
+| Escape Spearman | -0.028 | >= 0.30 | fail |
+| Escape AUROC | 0.484 | >= 0.65 | fail |
+| Restoration RR | +16.67pp | >= +20pp | fail |
+| Restored fraction | 16.7% | >= 25% | fail |
+| Restoration benign ORR | +1.11pp | <= +3pp | pass |
+
+Matched-ORR curves in the artifact:
+
+| Vector | Harmful RR delta | Benign ORR delta |
+|---|---:|---:|
+| RDO-A | +20.69pp | +0.05pp |
+| MDSteer-c2r | +27.27pp | +3.94pp |
+| SARSteer-text | +19.77pp | +0.02pp |
+| Random | +18.18pp | +0.61pp |
+
+The code's matched-ORR rule counts RDO as beating MDSteer-c2r because MDSteer's
+benign ORR is outside the `+1pp` tolerance relative to RDO (`+3.94pp` vs
+`+0.05pp`). For paper-facing claims, this should be strengthened with explicit
+alpha/strength sweeps so baselines are compared on a true ORR curve rather than a
+single coefficient.
+
+#### Interpretation
+
+Decision: `WEAK-GO`. The axis-existence gate is now passed: all-position RDO
+addition clears the preregistered `+20pp` heldout threshold, benign ORR remains
+controlled, ablation is strong, and the implemented matched-ORR baseline checks
+pass. This supports the rebuttal claim that the earlier `NO-GO` was at least
+partly an intervention-operator artifact.
+
+This is not a Strong GO. The style mechanism remains unsupported: the style gap
+is below threshold, escape is at chance or negative (`AUROC 0.484`), and
+coordinate restoration does not recover refusal enough (`+16.7pp`, 16.7% restored),
+although benign ORR under restoration is controlled. The current honest paper
+spine is therefore an axis/operator result, not a style-mediated refusal-escape
+result.
+
+Compared with `exp1_20260707_0633_style_rewrite_fast_a5000`, the all-position
+rebuttal changed the axis-side conclusion:
+
+```text
+add_rr_pp:            +19.3pp -> +20.7pp
+benign_orr_add_pp:     +0.6pp ->  +0.05pp
+ablation_asr_pp:      +33.0pp -> +35.6pp
+RDO vs MDSteer-c2r:    false  -> true under current matched-ORR tolerance
+decision:             NO-GO  -> WEAK-GO
+```
+
+Open issues before a paper-facing claim:
+
+- Run explicit single-position vs all-position comparison in the same artifact
+  table so the operator correction is auditable.
+- Add alpha/strength sweeps for RDO, MDSteer-c2r, SARSteer-text, and random
+  controls to report true ORR-matched curves.
+- Add a stronger judge protocol; current labels are heuristic and mark harmful
+  compliance for manual review.
+- Revisit style set only after establishing a genuine style behavior gap; the
+  current `sad`/`angry` rewrite condition does not support H3/H4.
+- Run `/codex-cross-check` / adversarial review on the latest numbers before
+  making a final GO statement.
+
 ### Venue timing (verified where possible, 2026-07-07)
 
 - Primary target: **ICLR 2027**, full paper approx Sept 23-24 2026 (inferred from
@@ -601,10 +750,10 @@ Current server-oriented implementation snapshot, 2026-07-05:
 
 - Raw data, cache, and run outputs default to `/workspace/audio_safety_data`.
   The git checkout remains `/workspace/audio-safety`.
-- Base project dependencies are managed with `uv sync`; GPU dependencies use
-  `uv sync --group gpu`. The only intentional isolated virtualenv is the
-  CosyVoice2 adapter under the data/cache workspace, because its dependency set
-  conflicts with the main Qwen2-Audio environment.
+- Base project dependencies are managed with `uv sync`; the default sync now
+  installs the dev and GPU dependency groups. The only intentional isolated
+  virtualenv is the CosyVoice2 adapter under the data/cache workspace, because
+  its dependency set conflicts with the main Qwen2-Audio environment.
 - OpenRouter pair generation is resumable. Per-row OpenRouter failures are
   written to a sidecar `.errors.jsonl` instead of aborting the whole run, and a
   later successful retry clears that stale sidecar entry.
