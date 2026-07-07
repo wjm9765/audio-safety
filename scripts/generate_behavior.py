@@ -21,6 +21,13 @@ from audio_safety.utils.paths import resolve_paths
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, required=True, help="experiment YAML")
+    parser.add_argument(
+        "--override",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="dotted config override, repeatable",
+    )
     parser.add_argument("--data-dir", type=Path, default=None, help="override data root")
     parser.add_argument("--cache-dir", type=Path, default=None, help="override model cache root")
     parser.add_argument("--limit", type=int, default=None, help="max rows to generate")
@@ -42,7 +49,7 @@ def row_key(row: dict[str, object]) -> tuple[str, str, str]:
 
 def main() -> None:
     args = parse_args()
-    cfg = load_experiment_config(args.config)
+    cfg = load_experiment_config(args.config, overrides=args.override)
     paths = resolve_paths(cfg.paths, data_dir=args.data_dir, cache_dir=args.cache_dir)
     source_path = paths.data_dir / cfg.dataset.asr.scored_manifest_file
     output_path = paths.data_dir / cfg.dataset.target_generation.outputs_file

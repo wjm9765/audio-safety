@@ -26,6 +26,13 @@ from audio_safety.utils.paths import resolve_paths, run_output_dir
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, required=True)
+    parser.add_argument(
+        "--override",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="dotted config override, repeatable",
+    )
     parser.add_argument("--run-name", type=str, required=True)
     parser.add_argument("--data-dir", type=Path, default=None)
     parser.add_argument("--output-dir", type=Path, default=None)
@@ -51,7 +58,7 @@ def validate_configured_layers(model, configured_layers: list[int]) -> None:
 
 def main() -> None:
     args = parse_args()
-    cfg = load_experiment_config(args.config)
+    cfg = load_experiment_config(args.config, overrides=args.override)
     paths = resolve_paths(
         cfg.paths,
         data_dir=args.data_dir,
