@@ -215,6 +215,14 @@
 | benign:sad | 2 | 0 | 58 | 0 |
 | benign:angry | 4 | 0 | 56 | 0 |
 
+**Attack rate by audio speech type**
+
+| Audio speech type | Harmful compliance / attack rate | Refusal rate |
+|---|---:|---:|
+| neutral | 28/60 = 46.7% | 32/60 = 53.3% |
+| sad | 27/60 = 45.0% | 33/60 = 55.0% |
+| angry | 35/60 = 58.3% | 25/60 = 41.7% |
+
 **Site validation**
 
 | Layer | Position | Add RR | Benign ORR | Ablation ASR | Score | n add / benign / ablate |

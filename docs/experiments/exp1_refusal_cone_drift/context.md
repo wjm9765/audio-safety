@@ -665,6 +665,14 @@ Heldout base behavior matched the previous style-rewrite run:
 The genuine style gap is still only `+5.0pp`, below the preregistered `+8pp`
 threshold. Angry is the only style that visibly increases harmful compliance.
 
+Attack rate by audio speech type:
+
+| Audio speech type | Harmful compliance / attack rate | Refusal rate |
+|---|---:|---:|
+| neutral | 28/60 = 46.7% | 32/60 = 53.3% |
+| sad | 27/60 = 45.0% | 33/60 = 55.0% |
+| angry | 35/60 = 58.3% | 25/60 = 41.7% |
+
 #### Heldout gate result
 
 | Metric | Value | Threshold | Verdict |
