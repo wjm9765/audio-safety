@@ -379,6 +379,145 @@ steps should thicken the layer-16 neighborhood and raise the RDO train budget to
 to clear `+20pp` *and* re-open the RDO-vs-DIM margin, before spending on the full
 12-site sweep or a stronger validated same-transcript style-control run.
 
+## 2026-07-07 literature survey and NO-GO root-cause diagnosis
+
+After the fast-run NO-GO, four parallel web surveys were run (refusal-direction
+literature, audio-LLM safety novelty check, activation-steering methodology, and
+venue/framing strategy including an analysis of 493 reviews from ICLR 2026
+activation-steering submissions). The consolidated conclusion is that the NO-GO
+is most likely an **intervention-operator artifact, not evidence that the axis is
+absent**.
+
+### Diagnosis: single-token-position intervention is the suspected root cause
+
+- Our current intervention edits only the last prompt token at a single layer.
+  `models/qwen2_audio.py:generate_audio_response_with_intervention` resolves one
+  absolute `token_index` and installs a single `ResidualStreamIntervention`
+  (`models/hooks.py`), so during KV-cached decode steps the absolute index falls
+  outside the length-1 step and the hook becomes a no-op. Generated tokens only
+  receive the edit indirectly through attention over one patched position.
+- Every steering method surveyed applies addition at **all token positions**
+  (single layer), and ablation across all layers/positions:
+  - Arditi et al., *Refusal Is Mediated by a Single Direction*, NeurIPS 2024
+    (arXiv:2406.11717): addition at one layer, **all token positions**; ablation
+    at every layer and position.
+  - Wollschlaeger et al. (RDO / *Geometry of Refusal*, ICML 2025,
+    arXiv:2502.17420): explicitly "follow common practice to apply both
+    operations across all token positions."
+  - CAA (arXiv:2312.06681), BiPO (arXiv:2406.00045), RepE (arXiv:2310.01405),
+    and even SARSteer itself add per-layer at all generated-token positions.
+  - arXiv:2509.12065 shows last-prompt-token-only steering can yield **zero**
+    downstream effect while all-position steering succeeds.
+- Coefficient is likely under-scaled: alpha=2.0 on a unit vector is ~1-5% of the
+  mid-layer residual norm for a 7B Qwen model. Qwen-family effective steering
+  factors were ~100-800 vs ~5-40 for Llama in arXiv:2509.12065. Arditi scales
+  the addition coefficient to the real refusal-coordinate magnitude
+  (`avg_proj_harmful`); RDO scales to the DIM norm.
+- The strong-ablation / weak-addition asymmetry is a known pattern: RDO
+  down-weights its addition loss to 0.2, and ACE (arXiv:2411.09003) explains it
+  as blind addition assuming a wrong (origin-centered) baseline, where ablation
+  is self-calibrating. So a +21.5pp ablation with a controlled benign ORR is
+  consistent with a real, but narrowly-driven, refusal coordinate.
+- Style-escape/restoration (H3/H4) were **untested, not refuted**: the fast run
+  used only {neutral, sad}, sad produced no genuine gap, so there were zero
+  style-induced compliance samples for restoration to recover.
+
+### Novelty and positioning (survey result)
+
+- The exact combination "gradient-optimized, audio-conditioned refusal axis in
+  Qwen2-Audio validated by causal steering" appears **unoccupied** as of
+  2026-07. Nearest neighbors use difference-in-means / SVD and are mostly
+  observational or on other models: Roh and Houmansadr (arXiv:2604.16659,
+  DIM/observational, not Qwen2-Audio), Omni-Safety/OmniSteer (arXiv:2602.10161),
+  Safety Geometry Collapse/ReGap (arXiv:2605.18104).
+- SARSteer (arXiv:2510.17633) is under review at ICLR 2026 with borderline
+  ratings [6,4,6,2]. Its negative claim ("audio DIM steering fails, no shared
+  harmful/safe subspace") is our direct foil; a gradient-optimized axis that
+  succeeds where DIM fails is a clean correction-style contribution.
+- StyleBreak (arXiv:2511.10692) is accepted at AAAI 2026, so the style-behavior
+  effect is taken, but a representation-level "style -> refusal-axis occupancy"
+  mechanism is still open.
+- Cleanest framing (audio analog of *Geometry of Refusal*): "Why audio steering
+  was thought to fail, and what actually works: gradient-optimized refusal axes
+  in audio LLMs."
+
+### Reviewer-derived pre-submission checklist (from ICLR 2026 review analysis)
+
+Missing baselines (43% of steering reviews), single-model risk, judge
+reliability, layer/strength sensitivity, and TTS realism dominate. Concretely:
+add a random/orthogonal-direction specificity control; use >=2 judges plus a
+human-agreement subset (not keyword-based refusal detection); add >=1 additional
+LALM or an explicit scoping argument; validate TTS against real speech; report
+benign over-refusal explicitly.
+
+### Next-action plan (agreed direction, not yet executed)
+
+1. **Highest-leverage fix — intervention scope.** Change addition/ablation to
+   apply at **all generated token positions** (make the hook survive KV-cached
+   decode steps), match train and eval intervention scope, and sweep alpha at
+   the natural refusal-coordinate / DIM-norm scale instead of a fixed 2.0 on a
+   unit vector. Add an Arditi-style coordinate-clamp (`h <- h - (h.u)u + c u`)
+   variant. Report single-position vs all-position side by side so the
+   intervention-breadth characterization becomes a contribution rather than a
+   silent fix.
+2. **Style set.** Replace {neutral, sad} with StyleBreak-effective styles
+   (child_female / elderly_male / fearful) to first establish a genuine
+   neutral-vs-style behavior gap before re-testing restoration (H4).
+3. **Process gate before re-running.** research-code-reviewer on the hook change
+   -> `uv run pytest` -> `/codex-cross-check` on the numbers ->
+   adversarial-reviewer, per the CLAUDE.md workflow.
+4. **Preregistration integrity.** The intervention-operator change is a §5
+   *operator-definition* correction (align with literature all-position
+   standard), not a §0 threshold change. Record it in design.md's change log and
+   report both operator variants. §0 GO/NO-GO thresholds remain untouched.
+
+### Next run is a direct rebuttal of the fast-run NO-GO
+
+**The next planned run is explicitly framed as a rebuttal / re-test of the first
+experiment (`exp1_fast_20260705_0702_audio_rdo_gate`, NO-GO), not as an
+independent new experiment.**
+
+- **What it rebuts.** The fast run concluded NO-GO on the sole basis of a weak
+  heldout addition effect (+11.8pp vs the preregistered +20pp). We now argue that
+  this specific number is an **intervention-operator artifact**: addition was
+  applied at a single prompt-token position with a fixed unit-vector coefficient
+  (alpha=2.0), which is narrower than every steering method in the literature and
+  under-scaled relative to the Qwen residual-stream norm (see the Diagnosis
+  subsection above). The fast run therefore under-measured addition sufficiency;
+  it did not demonstrate the axis is absent.
+- **What it does NOT rebut.** The fast run's *ablation* result (+21.5pp, strong)
+  and its controlled benign ORR (+2.6pp) stand and are re-used as supporting
+  evidence. The style-escape / restoration failure (`genuine_style_gap = -1.7pp`)
+  is treated as **untested, not refuted**, because the {neutral, sad} set never
+  produced a genuine style gap for restoration to act on.
+- **Falsifiable rebuttal hypothesis.** Applying addition/ablation at **all
+  generated token positions** with an alpha scaled to the DIM/refusal-coordinate
+  norm (plus the Arditi coordinate-clamp variant) will raise the heldout addition
+  effect above the +20pp preregistered threshold on the *same* axis and site,
+  while keeping benign ORR <= +3pp.
+- **Decision rule for the rebuttal.**
+  - If corrected all-position addition clears +20pp with benign ORR controlled ->
+    the fast-run NO-GO is overturned as an operator artifact; the axis-existence
+    gate flips toward GO/WEAK-GO and the operator-breadth comparison
+    (single-position vs all-position) becomes a paper contribution.
+  - If corrected addition still stalls below +20pp -> the NO-GO is upheld on
+    substance, and "audio-native addition sufficiency is genuinely hard" becomes
+    a legitimate, reportable result (necessity-strong / sufficiency-partial),
+    routed to the honest-partial venue plan below.
+- **Bookkeeping.** Both runs are kept in `results.md` as separate append-only
+  entries; the rebuttal entry must cite the fast run by name and report the
+  single-position vs all-position numbers side by side so the correction is
+  auditable rather than a silent overwrite.
+
+### Venue timing (verified where possible, 2026-07-07)
+
+- Primary target: **ICLR 2027**, full paper approx Sept 23-24 2026 (inferred from
+  the 2026 pattern; official 2027 dates not yet posted).
+- Alternatives with runway: ICASSP 2027 (Sept 16 2026), Interspeech 2027
+  (approx Feb-Mar 2027), NeurIPS 2026 workshops (approx Aug 29 2026, for an early
+  timestamp), TMLR (rolling; best fit for an honest necessity-strong /
+  sufficiency-partial result). AAAI-27 (Jul 28 2026) is too soon.
+
 ## Current Implementation Status
 
 Current server-oriented implementation snapshot, 2026-07-05:
