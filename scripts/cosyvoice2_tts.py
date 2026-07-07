@@ -26,9 +26,15 @@ TTS_BUILD_DEPS = ["setuptools<81", "wheel", "wheel_stub", "numpy==1.26.4", "cyth
 
 STYLE_INSTRUCTIONS = {
     "neutral": "Speak in a neutral, clear voice.<|endofprompt|>",
-    "sad": "Speak in a sad, subdued voice.<|endofprompt|>",
+    "sad": (
+        "Speak with clearly sad, low-energy, subdued prosody; use a slower pace, "
+        "lower pitch, and a slightly trembling emotional tone.<|endofprompt|>"
+    ),
     "fearful": "Speak in a fearful, anxious voice.<|endofprompt|>",
-    "angry": "Speak in an angry, tense voice.<|endofprompt|>",
+    "angry": (
+        "Speak with clearly angry, tense, frustrated prosody; use sharper emphasis, "
+        "firmer articulation, and controlled intensity.<|endofprompt|>"
+    ),
     "elderly_male": "Speak like an elderly male narrator, slow and clear.<|endofprompt|>",
     "child_female": "Speak like a young female child, clear and natural.<|endofprompt|>",
 }
@@ -40,6 +46,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--text-json", default=None, help="JSON string containing the text")
     parser.add_argument("--batch-jsonl", type=Path, default=None, help="JSONL batch render jobs")
     parser.add_argument("--style", default="neutral", help="style key from the experiment config")
+    parser.add_argument(
+        "--style-instruction",
+        default=None,
+        help="override CosyVoice instruct2 style prompt; batch jobs may set style_instruction",
+    )
     parser.add_argument("--output", type=Path, default=None, help="wav output path")
     parser.add_argument("--setup-only", action="store_true", help="bootstrap CosyVoice2 and exit")
     parser.add_argument("--cache-dir", type=Path, default=None, help="override TTS cache root")
@@ -160,8 +171,9 @@ def reexec_in_tts_venv(args: argparse.Namespace, venv_dir: Path) -> None:
     env = os.environ.copy()
     env[CHILD_ENV] = "1"
     cache_root = project_cache_dir(args)
-    env.setdefault("HF_HOME", str(DEFAULT_WORKSPACE / "cache" / "huggingface"))
-    env.setdefault("HF_HUB_CACHE", str(DEFAULT_WORKSPACE / "cache" / "huggingface" / "hub"))
+    shared_cache_root = cache_root.parent
+    env.setdefault("HF_HOME", str(shared_cache_root / "huggingface"))
+    env.setdefault("HF_HUB_CACHE", str(shared_cache_root / "huggingface" / "hub"))
     env.setdefault("TRITON_CACHE_DIR", str(cache_root / "triton"))
     env.setdefault("TORCH_EXTENSIONS_DIR", str(cache_root / "torch_extensions"))
     py = venv_python(venv_dir)
@@ -219,11 +231,12 @@ def synthesize_to_file(
     model,
     text: str,
     style: str,
+    style_instruction: str | None,
     prompt_audio: Path,
     output: Path,
 ) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
-    instruction = STYLE_INSTRUCTIONS.get(
+    instruction = style_instruction or STYLE_INSTRUCTIONS.get(
         style, f"Speak in a {style} style.<|endofprompt|>"
     )
     chunks = []
@@ -248,6 +261,7 @@ def render(args: argparse.Namespace) -> None:
         model=model,
         text=text,
         style=args.style,
+        style_instruction=args.style_instruction,
         prompt_audio=prompt_audio,
         output=output,
     )
@@ -268,6 +282,9 @@ def render_batch(args: argparse.Namespace) -> None:
             raise ValueError(f"batch job is missing output_path/output: {job}")
         output = Path(str(output_value))
         style = str(job.get("style") or args.style)
+        style_instruction = job.get("style_instruction") or args.style_instruction
+        if style_instruction is not None:
+            style_instruction = str(style_instruction)
         item_id = str(job.get("item_id") or job.get("query_id") or output.stem)
         safety_label = str(job.get("safety_label") or job.get("query_type") or "unknown")
         if output.exists():
@@ -283,6 +300,7 @@ def render_batch(args: argparse.Namespace) -> None:
             model=model,
             text=text_from_job(job),
             style=style,
+            style_instruction=style_instruction,
             prompt_audio=prompt_audio,
             output=output,
         )

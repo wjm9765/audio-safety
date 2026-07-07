@@ -19,6 +19,10 @@ from audio_safety.data.families import (
 from audio_safety.data.openrouter_pairs import (
     generate_benign_pair,
     generate_pair_manifest,
+    generate_style_variant,
+    generate_style_variant_manifest,
+    style_rows_from_harmful_seeds,
+    style_rows_from_pairs,
 )
 
 __all__ = [
@@ -29,6 +33,8 @@ __all__ = [
     "expected_audio_path",
     "generate_benign_pair",
     "generate_pair_manifest",
+    "generate_style_variant",
+    "generate_style_variant_manifest",
     "load_audio_rdo_pairs",
     "load_harmful_seed_rows",
     "render_audio_records",
@@ -36,6 +42,8 @@ __all__ = [
     "score_transcript_manifest",
     "score_transcript_records",
     "split_audio_rdo_pairs",
+    "style_rows_from_harmful_seeds",
+    "style_rows_from_pairs",
     "transcribe_records_with_command",
     "transcript_control_passed",
 ]

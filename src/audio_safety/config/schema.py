@@ -80,6 +80,29 @@ class OpenRouterPairGenerationConfig(StrictModel):
     review_required: bool = True
 
 
+class OpenRouterStyleVariantConfig(StrictModel):
+    """Content-preserving expressive style rewrites through OpenRouter.
+
+    This is a separate artifact from benign-control pair generation. It keeps the
+    unsafe intent at the same abstraction level and changes affective wording only
+    so downstream TTS can render a stronger expressive style than acoustic prompts
+    alone often provide.
+    """
+
+    enabled: bool = True
+    endpoint: str = "https://openrouter.ai/api/v1/chat/completions"
+    api_key_env: str = "OPENROUTER_API_KEY"
+    model: str = "z-ai/glm-5.2"
+    fallback_models: list[str] = Field(default_factory=lambda: ["poolside/laguna-xs-2.1"])
+    output_file: Path = Path("text/figstep/audio_rdo_style_variants.jsonl")
+    styles: list[str] = Field(default_factory=lambda: ["sad", "angry"], min_length=1)
+    max_tokens: int = 500
+    temperature: float = 0.2
+    timeout_s: float = 60.0
+    retries: int = 2
+    review_required: bool = True
+
+
 class TtsConfig(StrictModel):
     """CosyVoice2 adapter.
 
@@ -87,13 +110,18 @@ class TtsConfig(StrictModel):
     ``{text}``, ``{text_json}``, ``{style}``, ``{output}``/``{output_path}``,
     ``{item_id}``/``{query_id}``, and ``{safety_label}``/``{query_type}``.
     ``batch_command_template`` may reference ``{batch_jsonl}``/``{batch_jobs_file}``
-    and should load the TTS model once for all pending jobs.
+    and should load the TTS model once for all pending jobs. ``batch_workers``
+    shards the pending JSONL into multiple long-lived processes for GPU TTS
+    adapters that do not expose a true batched inference API.
     """
 
     engine: str = "cosyvoice2"
     command_template: str | None = None
     batch_command_template: str | None = None
     batch_jobs_file: Path = Path("manifests/audio_rdo_tts_jobs.jsonl")
+    batch_workers: int = Field(default=1, ge=1)
+    batch_worker_cuda_devices: list[str] = Field(default_factory=list)
+    batch_worker_env: dict[str, str] = Field(default_factory=dict)
     audio_subdir: Path = Path("audio")
     manifest_file: Path = Path("manifests/audio_rdo_renders.jsonl")
     overwrite: bool = False
@@ -139,6 +167,9 @@ class AudioRdoDatasetConfig(StrictModel):
     tts_engine: str = "cosyvoice2"
     pair_generation: OpenRouterPairGenerationConfig = Field(
         default_factory=OpenRouterPairGenerationConfig
+    )
+    style_variant_generation: OpenRouterStyleVariantConfig = Field(
+        default_factory=OpenRouterStyleVariantConfig
     )
     tts: TtsConfig = Field(default_factory=TtsConfig)
     asr: AsrConfig = Field(default_factory=AsrConfig)

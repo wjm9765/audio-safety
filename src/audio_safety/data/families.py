@@ -1,6 +1,7 @@
 """Audio rendering manifests and transcript-control records for Audio-RDO."""
 
 import json
+import os
 import shlex
 import subprocess
 from collections.abc import Iterable
@@ -71,6 +72,160 @@ def _format_command(template: str, values: dict[str, str]) -> list[str]:
     return shlex.split(formatted)
 
 
+def _batch_shard_path(batch_jobs_path: Path, worker_index: int) -> Path:
+    suffix = batch_jobs_path.suffix or ".jsonl"
+    stem = (
+        batch_jobs_path.name[: -len(suffix)]
+        if batch_jobs_path.suffix
+        else batch_jobs_path.name
+    )
+    return batch_jobs_path.with_name(f"{stem}.worker{worker_index:02d}{suffix}")
+
+
+def _split_jobs_round_robin(
+    jobs: list[dict[str, object]],
+    workers: int,
+) -> list[list[dict[str, object]]]:
+    shards: list[list[dict[str, object]]] = [[] for _ in range(workers)]
+    for index, job in enumerate(jobs):
+        shards[index % workers].append(job)
+    return [shard for shard in shards if shard]
+
+
+def _batch_worker_env(tts_cfg: TtsConfig, worker_index: int) -> dict[str, str]:
+    env = os.environ.copy()
+    env.update(tts_cfg.batch_worker_env)
+    if tts_cfg.batch_worker_cuda_devices:
+        device = tts_cfg.batch_worker_cuda_devices[
+            worker_index % len(tts_cfg.batch_worker_cuda_devices)
+        ]
+        env["CUDA_VISIBLE_DEVICES"] = str(device)
+    return env
+
+
+def _run_batch_shards(
+    tts_cfg: TtsConfig,
+    batch_jobs_path: Path,
+    pending_jobs: list[dict[str, object]],
+) -> None:
+    if not tts_cfg.batch_command_template:
+        raise ValueError("dataset.tts.batch_command_template is required")
+
+    workers = min(tts_cfg.batch_workers, len(pending_jobs))
+    if workers <= 1:
+        batch_values = {
+            "batch_jsonl": str(batch_jobs_path),
+            "batch_jobs_file": str(batch_jobs_path),
+            "worker_index": "0",
+            "worker_id": "0",
+            "num_workers": "1",
+            "cuda_device": (
+                str(tts_cfg.batch_worker_cuda_devices[0])
+                if tts_cfg.batch_worker_cuda_devices
+                else ""
+            ),
+        }
+        batch_command = _format_command(tts_cfg.batch_command_template, batch_values)
+        subprocess.run(
+            batch_command,
+            check=True,
+            timeout=None,
+            env=_batch_worker_env(tts_cfg, 0),
+        )
+        return
+
+    shards = _split_jobs_round_robin(pending_jobs, workers)
+    processes: list[tuple[int, list[str], subprocess.Popen[bytes]]] = []
+    for worker_index, shard_jobs in enumerate(shards):
+        shard_path = _batch_shard_path(batch_jobs_path, worker_index)
+        save_jsonl(shard_jobs, shard_path)
+        cuda_device = ""
+        if tts_cfg.batch_worker_cuda_devices:
+            device_index = worker_index % len(tts_cfg.batch_worker_cuda_devices)
+            cuda_device = str(tts_cfg.batch_worker_cuda_devices[device_index])
+        batch_values = {
+            "batch_jsonl": str(shard_path),
+            "batch_jobs_file": str(shard_path),
+            "worker_index": str(worker_index),
+            "worker_id": str(worker_index),
+            "num_workers": str(len(shards)),
+            "cuda_device": cuda_device,
+        }
+        command = _format_command(tts_cfg.batch_command_template, batch_values)
+        print(
+            f"[render] starting TTS worker {worker_index + 1}/{len(shards)} "
+            f"jobs={len(shard_jobs)} cuda={cuda_device or 'inherit'}",
+            flush=True,
+        )
+        processes.append(
+            (
+                worker_index,
+                command,
+                subprocess.Popen(
+                    command,
+                    env=_batch_worker_env(tts_cfg, worker_index),
+                ),
+            )
+        )
+
+    failures: list[tuple[int, list[str], int]] = []
+    for worker_index, command, process in processes:
+        returncode = process.wait()
+        if returncode:
+            failures.append((worker_index, command, returncode))
+    if failures:
+        worker_index, command, returncode = failures[0]
+        raise subprocess.CalledProcessError(
+            returncode,
+            command,
+            stderr=f"TTS worker {worker_index} failed; {len(failures)} workers failed",
+        )
+
+
+def _record_bool(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y"}
+    return bool(value)
+
+
+def _load_style_text_overrides(
+    data_dir: Path,
+    dataset_cfg: AudioRdoDatasetConfig,
+) -> dict[tuple[str, str, str], str]:
+    """Load reviewed/generated style rewrites for TTS, if present.
+
+    Missing or unusable rows fall back to the base pair text. Rows that
+    self-report added operational detail or refusal/warning content are skipped.
+    """
+    cfg = dataset_cfg.style_variant_generation
+    if not cfg.enabled:
+        return {}
+    path = data_dir / cfg.output_file
+    if not path.exists():
+        return {}
+
+    overrides: dict[tuple[str, str, str], str] = {}
+    for record in load_jsonl(path):
+        if _record_bool(record.get("added_operational_detail")):
+            continue
+        if _record_bool(record.get("refusal_or_warning")):
+            continue
+        if str(record.get("content_preservation", "")).strip().lower() == "low":
+            continue
+        styled_text = str(record.get("styled_text") or "").strip()
+        if not styled_text:
+            continue
+        key = (
+            str(record.get("item_id")),
+            str(record.get("safety_label")),
+            str(record.get("target_style") or record.get("style")),
+        )
+        overrides[key] = styled_text
+    return overrides
+
+
 def render_audio_records(
     pairs: Iterable[AudioRdoPair],
     dataset_cfg: AudioRdoDatasetConfig,
@@ -82,12 +237,13 @@ def render_audio_records(
     """Render harmful/benign pairs for every configured style.
 
     ``dry_run`` writes the same manifest records without invoking the TTS command.
-    If ``batch_command_template`` is configured, pending TTS jobs are written to one
-    JSONL file and rendered with a single long-lived TTS process.
+    If ``batch_command_template`` is configured, pending TTS jobs are written to a
+    JSONL file and rendered with one or more long-lived TTS worker processes.
     """
     audio_root = data_dir / tts_cfg.audio_subdir
     records: list[dict[str, object]] = []
     pending_jobs: list[dict[str, object]] = []
+    style_text_overrides = _load_style_text_overrides(data_dir, dataset_cfg)
 
     if not dry_run and not (tts_cfg.batch_command_template or tts_cfg.command_template):
         raise ValueError(
@@ -101,6 +257,11 @@ def render_audio_records(
             ("benign", pair.benign_text),
         ):
             for style in dataset_cfg.styles:
+                style_key = (pair.item_id, safety_label, style)
+                render_text = style_text_overrides.get(style_key, text)
+                style_text_source = (
+                    "openrouter_style_variant" if render_text != text else "base_pair_text"
+                )
                 output = expected_audio_path(
                     audio_root,
                     content_id=pair.item_id,
@@ -108,8 +269,8 @@ def render_audio_records(
                     style=style,
                 )
                 values = {
-                    "text": text,
-                    "text_json": json.dumps(text, ensure_ascii=False),
+                    "text": render_text,
+                    "text_json": json.dumps(render_text, ensure_ascii=False),
                     "style": style,
                     "output": str(output),
                     "output_path": str(output),
@@ -144,7 +305,9 @@ def render_audio_records(
                         "safety_label": safety_label,
                         "style": style,
                         "path": str(output.relative_to(data_dir)),
-                        "reference_text": text,
+                        "reference_text": render_text,
+                        "base_reference_text": text if render_text != text else None,
+                        "style_text_source": style_text_source,
                         "transcript": None,
                         "wer": None,
                         "duration_s": None,
@@ -157,13 +320,8 @@ def render_audio_records(
 
     if pending_jobs:
         batch_jobs_path = data_dir / tts_cfg.batch_jobs_file
-        batch_values = {
-            "batch_jsonl": str(batch_jobs_path),
-            "batch_jobs_file": str(batch_jobs_path),
-        }
         save_jsonl(pending_jobs, batch_jobs_path)
-        batch_command = _format_command(tts_cfg.batch_command_template or "", batch_values)
-        subprocess.run(batch_command, check=True, timeout=None)
+        _run_batch_shards(tts_cfg, batch_jobs_path, pending_jobs)
         missing = [
             str(job["output_path"])
             for job in pending_jobs

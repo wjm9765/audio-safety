@@ -19,13 +19,21 @@ def test_exp1_config_loads():
     assert str(cfg.dataset.source_file) == "text/figstep/audio_rdo_pairs.jsonl"
     assert cfg.dataset.pair_generation.model == "z-ai/glm-5.2"
     assert cfg.dataset.pair_generation.api_key_env == "OPENROUTER_API_KEY"
+    assert cfg.dataset.style_variant_generation.styles == ["sad", "angry"]
+    assert (
+        str(cfg.dataset.style_variant_generation.output_file)
+        == "text/figstep/audio_rdo_style_variants.jsonl"
+    )
     assert cfg.dataset.tts.engine == "cosyvoice2"
     assert "scripts/cosyvoice2_tts.py" in str(cfg.dataset.tts.command_template)
     assert "--batch-jsonl" in str(cfg.dataset.tts.batch_command_template)
+    assert cfg.dataset.tts.batch_workers == 2
+    assert cfg.dataset.tts.batch_worker_cuda_devices == ["0"]
+    assert cfg.dataset.tts.batch_worker_env["OMP_NUM_THREADS"] == "2"
     assert cfg.dataset.asr.mode == "skip"
     assert cfg.dataset.transcript_control.require_style_classifier_pass is False
     assert cfg.dataset.target_generation.max_new_tokens == 64
-    assert cfg.dataset.styles == ["neutral", "sad"]
+    assert cfg.dataset.styles == ["neutral", "sad", "angry"]
     assert cfg.hidden.layers == [8, 12, 16, 20, 24, 28]
     assert cfg.rdo.refusal_target.startswith("I'm sorry")
 

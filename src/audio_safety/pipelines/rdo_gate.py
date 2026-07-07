@@ -6,8 +6,8 @@ Algorithmic anchors:
   Language Models: Concept Cones and Representational Independence*.
 - DIM and SAR-style baseline vectors follow SARSteer's compliance-to-refusal and
   text-derived refusal steering baselines.
-- Style escape uses StyleBreak's transcript-fixed style-control motivation, but
-  measures only the preregistered Audio-RDO residual coordinate.
+- Style escape is now an exploratory content-preserving expressive-style
+  condition. It is not the same as a strict transcript-fixed acoustic-only test.
 """
 
 from __future__ import annotations

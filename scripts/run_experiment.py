@@ -20,6 +20,7 @@ from audio_safety.utils.seed import set_seed
 
 STAGES = (
     "pairs",
+    "style_variants",
     "render_audio",
     "score_transcripts",
     "behavior",
@@ -85,6 +86,28 @@ def main() -> None:
             limit=args.limit or cfg.dataset.n_pairs,
         )
         print(f"[pairs] wrote {len(pairs)} draft pairs -> {output_path}")
+        return
+
+    if args.stage == "style_variants":
+        from audio_safety.data import (
+            generate_style_variant_manifest,
+            load_audio_rdo_pairs,
+            style_rows_from_pairs,
+        )
+
+        pairs = load_audio_rdo_pairs(paths.data_dir, cfg.dataset)
+        if args.limit is not None:
+            selected_pairs = pairs[: args.limit]
+        else:
+            selected_pairs = pairs[: cfg.dataset.n_pairs]
+        rows = style_rows_from_pairs(selected_pairs, safety_label="both")
+        output_path = paths.data_dir / cfg.dataset.style_variant_generation.output_file
+        records = generate_style_variant_manifest(
+            rows,
+            cfg.dataset.style_variant_generation,
+            output_path,
+        )
+        print(f"[style] wrote {len(records)} style variant records -> {output_path}")
         return
 
     if args.stage == "render_audio":

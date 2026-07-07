@@ -1,6 +1,6 @@
 # Audio-RDO Gate Context
 
-Last updated: 2026-07-05
+Last updated: 2026-07-07
 
 This file preserves the working context behind the current experiment rewrite. The
 folder name remains `exp1_refusal_cone_drift` for repository continuity, but the
@@ -48,8 +48,11 @@ Implement each algorithm with the corresponding paper as the conceptual source:
   refusal direction / concept geometry approach in *Geometry of Refusal*.
 - **DIM baselines and SAR-style text vector:** based on SARSteer's audio
   activation mean-difference baselines and text-derived refusal steering.
-- **Style set and transcript-preserving acoustic variation:** based on
-  StyleBreak's paralinguistic/extralinguistic style axis framing.
+- **Style set and content-preserving expressive variation:** based on
+  StyleBreak's paralinguistic/extralinguistic style axis framing. As of
+  2026-07-07, the exploratory style condition is no longer strict same-transcript
+  acoustic-only TTS; it allows controlled affective rewrites that preserve the
+  request content while adding stronger spoken style.
 - **Audio harmfulness motivation and Qwen2-Audio relevance:** based on AIAH and
   related LALM safety results.
 
@@ -80,6 +83,11 @@ The current implementation reflects these decisions:
 - Do not run the real GPU/model/TTS pipeline on the local MacBook Air.
 - Simple CPU tests are allowed.
 - Remove test cache and temporary files after local tests.
+- As of 2026-07-07, compare `original`/`neutral` against `sad` and `angry`
+  variants first. Refinements such as more style classes, human ABX, and stronger
+  ASR/style filtering come after this simpler pivot is validated.
+- The new style claim must be described as **content-preserving expressive style
+  rewrite + acoustic style**, not as a pure same-transcript prosody intervention.
 
 ## Implemented Pipeline Shape
 
@@ -101,7 +109,9 @@ export OPENROUTER_API_KEY=<your_key>
 
 ./scripts/prepare_audio_rdo_pairs.py \
   --config configs/experiments/exp1_refusal_cone_drift.yaml \
-  --limit 150
+  --limit 150 \
+  --style-variants \
+  --style-safety-label both
 
 ./scripts/cosyvoice2_tts.py --setup-only
 
@@ -215,6 +225,48 @@ The next practical run should thicken the layer-16 neighborhood before attemptin
 the full 12-site sweep, for example layers `[14, 16, 18, 20]`,
 `first_generation_prelogit`, `train_steps=100..150`, and `limit_per_site=20..30`.
 
+### 2026-07-07 style-pivot conclusion
+
+The same-transcript CosyVoice2 neutral-vs-sad condition was too weak for the
+style claim. In the fast run, sad was not easier to attack than neutral
+(`harmful:neutral` compliance 28/60 vs `harmful:sad` compliance 27/60), and the
+hidden-state escape/restoration metrics also failed. Therefore the current paper
+claim should not say that a pure sad prosody shift was enough to create refusal
+escape.
+
+The next claim is narrower and more realistic:
+
+> For LALM safety, content-preserving expressive style changes can combine
+> lexical/pragmatic tone and acoustic prosody to move harmful audio behavior and
+> refusal-coordinate occupancy.
+
+Operationally, the pipeline now creates non-neutral style inputs in two steps:
+
+1. OpenRouter rewrites each selected prompt into `sad` and `angry` variants while
+   preserving the original request content and forbidding added operational
+   detail.
+2. CosyVoice2 renders those rewritten prompts with matching stronger style
+   instructions.
+
+Pilot check on 2026-07-07:
+
+- OpenRouter model tested: `z-ai/glm-5.2`.
+- Pilot shape: 5 seed rows x 2 styles (`sad`, `angry`) = 10 rewrites.
+- Result: 10/10 JSON success, 0 provider refusals, 0 self-reported added
+  operational detail, and all outputs reported high content preservation.
+- Qualitative weakness: angry variants can overuse impatience markers and sad
+  variants can introduce personal affect. The strengthened prompt now forbids
+  new backstory, threats, coercion, new urgency, and new operational specifics.
+- Cost estimate at the 2026-07-07 checked OpenRouter price for `z-ai/glm-5.2`:
+  generating 150 prompts x 2 styles is expected to be well below USD 1, with the
+  observed estimate around USD 0.21-0.26.
+
+Protocol note: this pivot is not the preregistered strict same-transcript H3/H4
+condition. If used as a paper-facing main claim, the methods/results text must
+explicitly state that the intervention is **content-preserving expressive rewrite
+plus acoustic TTS style**. A strict acoustic-only claim would require a separate
+TTS system or a new run with stronger validated same-transcript style control.
+
 ## Current Implementation Status
 
 Current server-oriented implementation snapshot, 2026-07-05:
@@ -228,11 +280,22 @@ Current server-oriented implementation snapshot, 2026-07-05:
 - OpenRouter pair generation is resumable. Per-row OpenRouter failures are
   written to a sidecar `.errors.jsonl` instead of aborting the whole run, and a
   later successful retry clears that stale sidecar entry.
-- Current fast gate uses two styles, `neutral` and `sad`: 150 pairs x
-  harmful/benign x 2 styles = 600 wav files. Broaden the style list only after
-  the RDO direction is promising.
-- CosyVoice2 rendering uses `scripts/cosyvoice2_tts.py --batch-jsonl`; the model
-  is loaded once and pending wav files are generated from a JSONL job queue.
+- OpenRouter style-variant generation is also resumable and now lives in the
+  same data-preparation path as pair generation:
+  `./scripts/prepare_audio_rdo_pairs.py --style-variants`. It writes
+  `text/figstep/audio_rdo_style_variants.jsonl` plus a sidecar error manifest,
+  and `render_audio_rdo.py` automatically uses valid `sad`/`angry` variants when
+  they exist.
+- Current pivot uses three styles, `neutral`, `sad`, and `angry`: 150 pairs x
+  harmful/benign x 3 styles = 900 wav files. Non-neutral styles can be backed by
+  `text/figstep/audio_rdo_style_variants.jsonl`, generated through OpenRouter.
+- CosyVoice2 rendering uses `scripts/cosyvoice2_tts.py --batch-jsonl`. Run
+  `./scripts/cosyvoice2_tts.py --setup-only` once before rendering so repo/venv
+  and checkpoint setup are not raced by parallel workers.
+- On the RTX A5000 config, `render_audio_rdo.py` shards pending TTS jobs into 2
+  worker JSONL files and launches 2 long-lived CosyVoice2 processes on
+  `CUDA_VISIBLE_DEVICES=0`. If 24GB VRAM leaves headroom, raise with
+  `--override dataset.tts.batch_workers=3`; if contention appears, lower to `1`.
 - ASR transcript control is currently `dataset.asr.mode: skip`. The
   `score_transcripts.py` stage remains in the pipeline only to produce the
   downstream scored manifest with `transcript_control_skipped=true` and
