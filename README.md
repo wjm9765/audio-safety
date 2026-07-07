@@ -143,11 +143,11 @@ export RUN_NAME=exp1_$(date +%Y%m%d_%H%M)_allpos_rebuttal
   --config configs/experiments/exp1_refusal_cone_drift_fast.yaml \
   --run-name "${RUN_NAME}_smoke"
 
-# Overnight: layer-16 neighborhood, train -> extract -> evaluate.
+# Overnight: layer-12/16 neighborhood, train -> extract -> evaluate.
 nohup bash -c '
 ./scripts/train_rdo_axis.py \
   --config configs/experiments/exp1_refusal_cone_drift_fast.yaml \
-  --override "hidden.layers=[14,16,18,20]" \
+  --override "hidden.layers=[12,14,16,18,20]" \
   --override "rdo.train_steps=100" \
   --override "rdo.limit_per_site=20" \
   --run-name "$RUN_NAME" \
@@ -163,7 +163,7 @@ tail -f "outputs/${RUN_NAME}.log"
 cat "/workspace/audio_safety_data/outputs/${RUN_NAME}/metrics.json"
 ```
 
-Always quote list overrides such as `"hidden.layers=[14,16,18,20]"`, especially
+Always quote list overrides such as `"hidden.layers=[12,14,16,18,20]"`, especially
 under zsh. With all-position intervention, `alpha=2.0` may over-steer; if benign
 ORR or decoding failures spike, lower alpha with a matching train/eval override
 such as `--override rdo.alpha=1.0` or `--override rdo.alpha=0.5`.
