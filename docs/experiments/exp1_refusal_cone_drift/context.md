@@ -359,6 +359,44 @@ benign over-refusal explicitly.
    standard), not a §0 threshold change. Record it in design.md's change log and
    report both operator variants. §0 GO/NO-GO thresholds remain untouched.
 
+### Next run is a direct rebuttal of the fast-run NO-GO
+
+**The next planned run is explicitly framed as a rebuttal / re-test of the first
+experiment (`exp1_fast_20260705_0702_audio_rdo_gate`, NO-GO), not as an
+independent new experiment.**
+
+- **What it rebuts.** The fast run concluded NO-GO on the sole basis of a weak
+  heldout addition effect (+11.8pp vs the preregistered +20pp). We now argue that
+  this specific number is an **intervention-operator artifact**: addition was
+  applied at a single prompt-token position with a fixed unit-vector coefficient
+  (alpha=2.0), which is narrower than every steering method in the literature and
+  under-scaled relative to the Qwen residual-stream norm (see the Diagnosis
+  subsection above). The fast run therefore under-measured addition sufficiency;
+  it did not demonstrate the axis is absent.
+- **What it does NOT rebut.** The fast run's *ablation* result (+21.5pp, strong)
+  and its controlled benign ORR (+2.6pp) stand and are re-used as supporting
+  evidence. The style-escape / restoration failure (`genuine_style_gap = -1.7pp`)
+  is treated as **untested, not refuted**, because the {neutral, sad} set never
+  produced a genuine style gap for restoration to act on.
+- **Falsifiable rebuttal hypothesis.** Applying addition/ablation at **all
+  generated token positions** with an alpha scaled to the DIM/refusal-coordinate
+  norm (plus the Arditi coordinate-clamp variant) will raise the heldout addition
+  effect above the +20pp preregistered threshold on the *same* axis and site,
+  while keeping benign ORR <= +3pp.
+- **Decision rule for the rebuttal.**
+  - If corrected all-position addition clears +20pp with benign ORR controlled ->
+    the fast-run NO-GO is overturned as an operator artifact; the axis-existence
+    gate flips toward GO/WEAK-GO and the operator-breadth comparison
+    (single-position vs all-position) becomes a paper contribution.
+  - If corrected addition still stalls below +20pp -> the NO-GO is upheld on
+    substance, and "audio-native addition sufficiency is genuinely hard" becomes
+    a legitimate, reportable result (necessity-strong / sufficiency-partial),
+    routed to the honest-partial venue plan below.
+- **Bookkeeping.** Both runs are kept in `results.md` as separate append-only
+  entries; the rebuttal entry must cite the fast run by name and report the
+  single-position vs all-position numbers side by side so the correction is
+  auditable rather than a silent overwrite.
+
 ### Venue timing (verified where possible, 2026-07-07)
 
 - Primary target: **ICLR 2027**, full paper approx Sept 23-24 2026 (inferred from
