@@ -1,10 +1,58 @@
 # Audio-RDO Gate Context
 
-Last updated: 2026-07-07
+Last updated: 2026-07-08
 
 This file preserves the working context behind the current experiment rewrite. The
 folder name remains `exp1_refusal_cone_drift` for repository continuity, but the
 active first experiment is now the **Audio-RDO Refusal Axis Existence Gate**.
+
+## Current State (2026-07-08)
+
+This run is a **direction-finding validation**, not the paper-facing final run.
+Its job is to settle two questions before we commit the paper's spine: (1) does a
+manipulable refusal axis exist in the LALM residual stream, and (2) is speech
+style what moves harmful audio off that axis? Answers below.
+
+- **Latest run:** `exp1_20260707_1557_allpos_rebuttal_l12nbhd` (all-position
+  operator). Full detail in the run section below and in [results.md](./results.md).
+- **Key finding (the anchor): a manipulable audio-conditioned refusal axis
+  exists in Qwen2-Audio's LLM residual stream.** The strongest evidence is
+  ablation, which is large and stable across every run so far
+  (`+21.5 -> +33.0 -> +35.6pp`) and independent of the borderline addition
+  number. With the all-token operator, addition also clears the preregistered bar
+  (`+20.7pp >= +20`) while benign over-refusal stays flat (`+0.05pp`). So the
+  axis is real and causal in both directions (add refusal / ablate refusal),
+  benign-controlled. This is the point the paper leads with.
+- **Hypothesis tested and NOT supported: speech style does not move harmful audio
+  off this refusal axis.** The original guess — that `sad`/`angry` style pushes
+  harmful audio away from the refusal coordinate and thereby flips refusal — does
+  not hold. There IS a behavioral style effect (`angry` attack rate `58.3%` vs
+  `neutral` `46.7%`, `+11.6pp`), but it is **not mediated by this axis**: escape
+  projection is at chance (`AUROC 0.484`, `Spearman -0.028`), the genuine style
+  gap is only `+5.0pp` (<8), and coordinate restoration recovers little
+  (`+16.7pp`, `16.7%`). This is a clean **dissociation** — style changes behavior,
+  but not by traveling along the found refusal axis — and is itself an
+  informative negative, not just a failed check.
+- **Decision:** `WEAK-GO`, which is exactly the preregistered §0 *Weak GO* clause
+  (axis passes add/ablate/benign + beats baseline at matched ORR, but
+  style/restoration evidence is weak). Preregistration-consistent, not a moved
+  goalpost. No §0 NO-GO trigger fires (RDO does not fail like DIM; benign ORR is
+  controlled; style effect is not decoding failure; there is no escape correlation
+  left unrestored; SARSteer-text does not dominate).
+- **Honest paper spine now:** *"Gradient-optimized audio-conditioned refusal axes
+  exist in LALMs — and speech-style jailbreaks do NOT work by escaping them."*
+  A found-axis result plus a mechanistic negative on the style-escape hypothesis.
+  **Do not claim style-mediated refusal escape.**
+- **Deferred to the paper-facing run (NOT required for this direction decision).**
+  These are writeup-hardening steps, explicitly out of scope for the validation
+  phase; noted here only so they are not forgotten when the claim is drafted:
+  single-position vs all-position side-by-side table (to isolate the operator
+  effect from the concurrent layer/budget change), alpha/strength-swept ORR
+  curves vs MDSteer-c2r/SARSteer-text (the current matched-ORR win rests on a
+  ±1pp tolerance rule; MDSteer has higher raw RR `+27.3pp` @ `+3.94pp` ORR),
+  a bootstrap CI on `add_rr_pp` (the `+20.7pp` pass clears `+20` by only `+0.7pp`),
+  a stronger judge than heuristic labels, and `/codex-cross-check` +
+  adversarial-reviewer before final GO language.
 
 ## Current Thesis
 
