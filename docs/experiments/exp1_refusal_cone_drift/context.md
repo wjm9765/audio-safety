@@ -147,9 +147,45 @@ the hooks, and the existing harmful/benign pairs. Design (sharpened in debate):
 
 `r_A` (the WEAK-GO result) becomes the **instrument**, not the headline. The
 spine becomes causal: *"In LALMs, harmful speech is represented as harmful but
-under-activates the text-trained refusal axis; this conversion gap — not prosody
-— is why audio jailbreaks beat matched text."* The prosody negative and the
-WEAK-GO axis both become supporting results.
+under-activates a text/audio-reachable refusal axis; this conversion gap — not
+prosody — is why audio jailbreaks beat matched text."* The prosody negative and
+the WEAK-GO axis both become supporting results. (Note: say "text/audio-reachable
+refusal axis," not "text-trained axis," until `r_T` alignment is shown — see Run 4.)
+
+### Run 4 pre-registration (2026-07-08) — the decided next experiment
+
+Locked in [run4_conversion_gap_design.md](./run4_conversion_gap_design.md). Run 4
+is the single next action; do NOT add style variants or run an RDO-vs-MDSteer
+strength sweep first. It does not edit design.md §0 (separate hypothesis set).
+Key decisions (the adversarial-review feedback folded in minimally):
+
+- **The missing piece = the TEXT arm.** We only ever ran audio. Run 4 puts the
+  same harmful/benign content through text and audio and compares the refusal
+  coordinate.
+- **Three axes:** `r_A` (frozen, audio RDO), new `r_T` (text RDO refusal), `r_H`
+  (harmfulness, trained on **content-harmfulness label**, not refusal — plus an
+  audio-native probe to separate "probe doesn't transfer" from "harmfulness
+  degraded").
+- **Hypotheses:** H1 harmfulness preserved, H2 refusal under-activated in audio,
+  H3 natural (measured) coordinate clamp closes the behavioral gap.
+- **Feedback folded in:** (1) mediation clamp runs **all-position** primary, not
+  just single-position — single-position is the exact Run 3 restoration operator
+  that washed out during decode, so a low single-position MF must not be misread
+  as falsification; (2) **specificity control is primary** — `r_R` gap must exceed
+  `r_H` gap ≈ random-direction gap, else it is just the modality offset; (3) the
+  **writer test** (Δc_R at matched c_H) is the primary mechanism evidence, T1
+  equivalence is only supporting; (4) a **within-modality refusal-readout AUROC
+  gate** on `r_A`/`r_T` before any projection comparison; (5) MF judged by
+  **sign + one-sided test** (not the ladder cutpoints) given n; behavioral arm
+  scaled toward full 150 pairs.
+- **Primary decision position = P2** (first assistant prelogit; the only
+  structurally matched position across modalities). Primary layer locked from a
+  pilot over `[12,14,16,18,20]`.
+- **Falsifiers:** F1 audio c_H reduced + r_H-patch restores refusal → perception
+  reframe; F2 c_H≈ & c_R≈ but still complies & clamp fails → modality-gated
+  readout; F3 low `cos(r_A,r_T)` → drop "text-trained axis" wording.
+- **Before running:** lock these thresholds (done) and `/codex-cross-check` the
+  decision logic blind.
 
 ## Current Thesis
 
