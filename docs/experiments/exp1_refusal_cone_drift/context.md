@@ -54,6 +54,103 @@ style what moves harmful audio off that axis? Answers below.
   a stronger judge than heuristic labels, and `/codex-cross-check` +
   adversarial-reviewer before final GO language.
 
+## Causal Core — why is audio more vulnerable than identical-content text? (2026-07-08)
+
+The real scientific question the paper must answer is not "does a refusal axis
+exist" (WEAK-GO already says yes) but the **causal** one: *why does the SAME
+harmful request bypass safety more as speech than as text?* The project is
+uniquely positioned to answer this **mechanistically** rather than just
+demonstrate it, because it already holds an ablation-verified refusal axis `r_A`.
+This section records a blind, adversarial re-examination (two independent Codex
+runs incl. gpt-5.5/xhigh + two literature surveys, debated and reconciled).
+
+### Convergent answer
+
+All independent sources ranked the same leading mechanism and the same decisive
+experiment. The style/prosody channel is already ruled out as primary by our own
+data (escape AUROC ~0.48). Ranked mechanistic hypotheses (residual-stream level):
+
+1. **[LEAD] Refusal under-activation / harmfulness→refusal conversion failure.**
+   The audio pathway carries the request's harmfulness but writes too little onto
+   the causally load-bearing `r_A`. The safety machinery exists and works (strong
+   ablation), audio just doesn't drive it above the refusal margin.
+2. **Misrouting / localization.** Harmfulness may be present at audio-content
+   positions but not routed to the answer-decision state (final user / first
+   generated tokens). A sub-variant of (1) that the experiment must disentangle.
+3. **Orthogonal pro-compliance pressure.** `r_A` is necessary but not sufficient;
+   audio adds a competing instruction-following / "answer the speaker" component.
+   Hinted at because addition recovers only ~+20pp, not full closure.
+4. **Modality-gated readout.** Similar `r_A` coordinate but different downstream
+   interpretation under an audio-context offset.
+5. **[#1 CONFOUND] Upstream semantic degradation.** "Identical content" for a
+   human may not be identical for the model — internal mis/under-transcription
+   softens the harmful intent. Must be ruled out, not assumed away.
+6. Prosody (already downranked by our AUROC ~0.48). 7. Pure artifact
+   (ASR/judge/decoding/acoustic confounds).
+
+### Novelty (survey verdict)
+
+**OPEN for audio.** The vision analog is largely taken — Safety Geometry Collapse
+(arXiv:2605.18104), ShiftDC (2502.13095), Cross-Modal Safety Mechanism Transfer
+(2410.12662) all show non-text inputs under-project onto a still-causal refusal
+direction. For audio the closest are: `2604.16659` (refusal-direction projection,
+audio "distant from the refusal boundary" — but scoped to *fine-tuning erosion*,
+not the base-model modality gap) and SARSteer (argues a *different* geometry —
+audio harmful/safe *more* separable, "no shared subspace"). **No one has projected
+matched harmful text vs audio onto an ablation-verified, audio-reachable refusal
+axis and shown under-activation is the causal driver while ruling out prosody.**
+That conjunction is the paper.
+
+### The decisive experiment (the missing measurement: add the TEXT arm)
+
+We have only ever run the audio arm. The single highest-value next step is a
+**matched text-vs-audio comparison of the refusal coordinate**, reusing `r_A`,
+the hooks, and the existing harmful/benign pairs. Design (sharpened in debate):
+
+- Measure TWO directions on identical content, text vs audio, at the layer-16
+  family and at decision positions: a **harmfulness** direction `r_H` (per "LLMs
+  Encode Harmfulness and Refusal Separately", arXiv:2507.11878) and the refusal
+  axis `r_A`.
+- **Predicted double dissociation:** `proj(audio,r_H) ≈ proj(text,r_H)`
+  (harmfulness intact) while `proj(audio,r_A) << proj(text,r_A)` (refusal
+  under-driven).
+- **Sharper writer test (preferred discriminator):** measure the per-layer WRITE
+  onto `r_A`, `Δc_A(l,p) = <block_output_{l,p}, r_A>`. Claim predicts that at
+  equal harmfulness `c_H`, audio writes less refusal (`Δc_A_audio << Δc_A_text`)
+  at the refusal-writing layers — this tests the *conversion*, not mere
+  coexistence of two coordinates.
+- **Causal test:** NATURAL (measured) bidirectional `r_A`-coordinate swap — clamp
+  audio's measured `c_A` up to text's measured `c_A` (and text down to audio's).
+  Key statistic = **mediation fraction of the paired behavioral gap**. Must use
+  measured values, not an override, or it only proves controllability.
+
+### Confound killers and precise falsifiers (from the adversarial round)
+
+- **Framing caveat:** do NOT claim "the model knows it's harmful yet refuses
+  not." The defensible claim is weaker and sharper: *harmfulness is linearly
+  recoverable from audio states but is not bound/routed into the native refusal
+  circuit* — an accessibility/conversion failure, not perception failure.
+- **Rule out the perception confound:** feed the model's OWN transcript back as
+  text — if text refusal returns, LLM-level perception is fine and the cause is
+  the audio representation; also gate on external + human ASR so only faithfully
+  transcribed items count; match decoding/system prompt across modalities; blind
+  the judge to modality; regress out acoustic confounds (speaker/duration/loudness).
+- **Falsifier 1 (reroutes paper to perception):** audio `c_H` is reduced AND
+  patching `r_H` (not `r_A`) into audio restores refusal → conversion isn't
+  broken, upstream harmfulness is degraded.
+- **Falsifier 2 (kills under-activation):** `c_H_audio ≈ c_H_text` AND
+  `c_A_audio ≈ c_A_text` at decision positions but audio still complies and the
+  `r_A` swap fails to close the gap → modality-gated readout / orthogonal
+  pressure, not under-activation.
+
+### How this reframes the paper
+
+`r_A` (the WEAK-GO result) becomes the **instrument**, not the headline. The
+spine becomes causal: *"In LALMs, harmful speech is represented as harmful but
+under-activates the text-trained refusal axis; this conversion gap — not prosody
+— is why audio jailbreaks beat matched text."* The prosody negative and the
+WEAK-GO axis both become supporting results.
+
 ## Current Thesis
 
 The first paper claim should not start from a multi-cone defense. The first gate
