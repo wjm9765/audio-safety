@@ -20,6 +20,7 @@ from typing import Any
 import yaml
 
 from audio_safety.config.schema import ExperimentConfig
+from audio_safety.utils.env import load_project_dotenv
 
 # Top-level keys whose string value is treated as a path to another YAML file.
 _FILE_REF_KEYS = ("model", "paths", "dataset")
@@ -63,6 +64,11 @@ def load_experiment_config(
     path: Path | str,
     overrides: list[str] | None = None,
 ) -> ExperimentConfig:
+    # Load .env before any run so OPENROUTER_API_KEY (and other secrets) resolve
+    # from the project .env instead of requiring a manual shell export. No-op when
+    # .env is absent (CPU tests / CI); never overrides an already-set variable.
+    load_project_dotenv()
+
     path = Path(path)
     raw = load_yaml(path)
 
