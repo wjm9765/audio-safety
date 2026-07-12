@@ -9,6 +9,15 @@ active next design is the Run 4 conversion/writer test audited below.
 
 ## Current State (updated 2026-07-12)
 
+> **2026-07-12 — 방향 전환: attack-induced-flip (명세: [run4_conversion_gap_design.md](./run4_conversion_gap_design.md) §8).**
+> matched-neutral conversion-gap 라인(Stage A T0 RD +2.7pp n.s.; Stage B UNRESOLVED)은 세팅 버그가
+> 아니라 **조건 특정적 결과**로 확인됨 — JALMBench(2505.17568) Qwen2-Audio matched non-adversarial
+> +0.4pp("가장 작은 modality gap")과 정합. 새 operative 방향 = **거부가 공격 때문에 응락으로 뒤집히는
+> 순간(flip)을 다차원 분석(행동 + r_A/r_H 표현) + 방법론 제시**. 공격군 = text-jailbreak→speech(primary)
+> + StyleBreak식 감정(angry/sad 말투변형 + CosyVoice2 감정렌더, secondary); acoustic/AdvWave 연기.
+> matched-null은 boundary evidence로 보존. 근거: Codex gpt-5.6-sol(xhigh) 3라운드 재논의 + 문헌·코드
+> 감사. 아래 §7 이하의 conversion-gap 서술은 이 전환 이전의 히스토리로 보존한다.
+
 This run is a **direction-finding validation**, not the paper-facing final run.
 Its job is to settle two questions before we commit the paper's spine: (1) does a
 manipulable refusal axis exist in the LALM residual stream, and (2) is speech

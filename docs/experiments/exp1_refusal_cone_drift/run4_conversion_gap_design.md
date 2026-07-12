@@ -276,6 +276,91 @@ audio-text 격차를 **설명**한다고 주장하지 않는다. component(attn/
 input을 포함한 엄밀 telescoping, all-position measured clamp, 다층 c_H sweep, 확정 cohort는 Stage C/
 paper run으로 이연.
 
+## 8. Attack-induced-flip 방향 전환 — 2026-07-12 amendment
+
+> 이 절은 2026-07-12 사용자 결정 + Codex(gpt-5.6-sol xhigh) 3라운드 재논의 + 14-agent 문헌 검증 +
+> 4-agent 코드베이스 감사를 반영한 **새 direction-finding 명세**다. §0 표(T1–T4·Specificity·Benign)와
+> §1 가설은 **수정하지 않는다**(과거 사전등록으로 보존). §7/§7.5의 matched-neutral conversion-gap
+> 라인은 아래 근거로 **operative plan에서 물러나고**, 이 §8이 현재 진행 방향이다.
+
+### 8.0 왜 전환하나 (근거 요약)
+
+matched-neutral text-vs-audio 행동 격차가 사실상 없음(Stage A T0 RD +2.7pp n.s.; Stage B r_A readout
+AUROC 0.60, specificity 0.055 → UNRESOLVED). 이는 세팅 버그가 아니라 **조건 특정적 결과**다: JALMBench
+(ICLR2026, 2505.17568) Table1의 Qwen2-Audio matched non-adversarial 격차 = +0.4pp("가장 작은 modality
+gap")과 정합. 문헌의 큰 audio>text 격차는 **적대적 공격 / 공격적 framing / 약한 아키텍처 / 다국어**에서
+나온다(AIAH Setting3의 "generate detailed steps" wrapper 등). 따라서 "평범한 음성이 더 취약"이 아니라
+**"공격이 걸렸을 때 거부가 뒤집히는 순간(attack-induced flip)을 분석"**하는 쪽으로 전환한다.
+matched-neutral null은 폐기가 아니라 **경계 조건(boundary evidence)**으로 보존한다(평범 음성=결손 없음,
+공격=결손 → 메커니즘은 modality 전반이 아니라 attack-유발).
+
+### 8.1 합의된 방향 (사용자 결정)
+
+거부하던 모델이 **공격 때문에** 응락으로 뒤집히는 순간을 **여러 차원에서 분석**하고, 그 위에 방법론
+(메커니즘 진단 → 표적 개입)을 제시한다. 이는 논문 spine을 확정하기 위한 **direction-finding**이며(이
+방향으로 가도 되는지 검증), §0/paper-final gate가 아니다. 아래 8.2–8.6은 고정 임계값 cascade가 아니라
+**유연한 분석 명세**다.
+
+### 8.2 공격군 (frozen before r_A alignment)
+
+두 family를 사용하고, r_A 정렬을 보기 전에 동결한다.
+
+1. **Text-jailbreak→speech (primary).** 공개 text jailbreak(ICA/PAP 계열 등; 착수 시 정확한 벤치마크·
+   템플릿 id를 동결)를 CosyVoice2 **neutral** 음성으로 렌더. harmful payload가 표현에 보존될 개연성이
+   높아 r_H/r_A 분석이 유의미. text 대응 arm이 있어 audio-specificity(interaction) 측정 가능.
+2. **StyleBreak식 감정 공격 (secondary).** angry·sad에 대해 **말투 변형(content-preserving affective
+   rewrite)** + **CosyVoice2 감정 렌더(instruct2 style)**. 기존 `style_variant_generation` +
+   `STYLE_INSTRUCTIONS` 경로 재사용. 진짜 audio-native 공격이며 transcript-identical text 통제가 가능.
+
+acoustic/waveform(AdvWave 등)은 **연기**(perception null 재발 위험 P~0.70 · 고비용).
+
+### 8.3 대비 구조 — attack-induced FLIP (핵심)
+
+설명 단위는 "공격 vs 정상 대화"가 아니라 **같은 harmful 내용 ± 공격변환 T의 flip**이다.
+
+- **within-modality flip (primary):** `A(H)`(clean harmful audio, 거부) vs `A(T(H))`(attacked, 응락).
+  flip subset = **genuine 거부 → 응락** 전이(ASR-garble/describe 비응답과 구분).
+- **benign specificity (필수):** `A(B)` vs `A(T(B))` — double difference로 일반적 이동이 특이 refusal
+  억제로 위장하는 것 차단.
+- **audio-specificity (interaction, 선택):** text leg `X(H)`/`X(T(H))`(jailbreak arm) 또는
+  transcript-identical text(emotion arm) — `Δ_audio − Δ_text`. flip은 modality 내부 대비라 이전의
+  audio/text 프롬프트 비대칭 문제가 대부분 상쇄된다(각 modality가 자기 framing 상수를 소거).
+
+### 8.4 분석 차원 (multi-dimensional)
+
+- **행동:** family별 flip rate, benign DiD specificity, blind judge 2개 + **genuine-refusal vs
+  ASR-garble/describe/generic-non-answer taxonomy**(flip이 진짜 안전전이를 뜻하도록).
+- **표현:** flip 집합에서 `r_H`(harmfulness 선형복원 → perception 여부) + `r_A`(refusal 좌표가 flip에서
+  under-written 되나), double-difference `D_u = [u(A(T(H)))−u(A(H))] − [u(A(T(B)))−u(A(B))]`.
+  **r_A는 add/ablate 인과검증된 CONTROLLER지 자연 readout이 아님(AUROC 0.60)** → 신중히 다루고,
+  harmfulness는 반드시 **별도 cross-fit r_H**로 잰다.
+- **메커니즘 판정:** perception / conversion / readout 중 각 family의 flip을 무엇이 설명하는지(강제
+  선택 없이 MIXED/UNRESOLVED 허용).
+- **인과(방향이 살면):** `A(H)`의 r_A 좌표를 `A(T(H))`에 source-local 복원(+ wrong-layer/shuffled-pair/
+  norm-matched-random sham) 또는 표적 방어. defense 비교는 **full SARSteer**(text vector + PCA
+  safe-space ablation) 포함 **strength-swept Pareto**.
+
+### 8.5 알려진 prior (정직성)
+
+이전 Run 3의 sad/angry style은 **r_A로 매개되지 않았다**(escape AUROC 0.484, Spearman −0.028). 따라서
+emotion family의 flip은 **r_A가 아닌 다른 채널**로 작동할 수 있고, 이는 실패가 아니라 **두 family가
+서로 다른 메커니즘일 수 있다는 정보**다(jailbreak arm=conversion 가설 검증 가능 / emotion arm=비-r_A
+채널 대조). 두 family를 함께 보는 이유다. broad prosody 기각은 금지(StyleBreak/Acoustic Interference).
+
+### 8.6 integrity
+
+- attack family set을 **r_A 정렬 관측 전 동결**(템플릿 id/해시 기록), 실패·null family도 전부 보고.
+- 기존 150 FigStep cohort는 Run 4로 노출됨 → **paper-facing 확정은 새 source/category-held-out
+  cohort** 필요. direction-finding은 기존 cohort로 가능.
+- decoding failure는 분모 유지(non-attack), verdict 결측만 제외.
+- 이 문서 §0·§1과 `design.md` §0은 **불변**, `results.md`는 append-only.
+
+### 8.7 이 명세가 §7 exp1/2/3와 다른 점
+
+§7의 T0 hard gate + 3단 cascade(고정 임계값)와 달리, §8은 **방향 검증용 유연 분석**이다: 행동 flip과
+표현 분석을 함께 돌려 "이 방향으로 갈 수 있는지"를 판단하고, 방어/인과는 flip·메커니즘이 실제로 보일
+때만 확장한다. 착수 시 임계값(flip 최소치, family당 flip 수 등)은 이 절에 동결하되 §0 표는 건드리지 않는다.
+
 ## 변경 이력
 
 - 2026-07-08 — 최초 사전 등록.
@@ -293,3 +378,10 @@ paper run으로 이연.
   판정에서 insufficient→AMBIGUOUS(false STOP 방지), (3) harmful−benign paired diff-in-diff를
   specificity 지표로 추가, (4) two-sided McNemar/paired bootstrap 정확성 확인(변경 없음). §0·§1·§7
   임계값 불변.
+- 2026-07-12 — **§8 추가 — attack-induced-flip 방향 전환 (direction-finding).** 사용자 결정: matched-
+  neutral conversion-gap 라인(§7/§7.5)에서 물러나 "공격으로 거부가 뒤집히는 순간(flip)을 다차원 분석 +
+  방법론" 방향으로. 공격군 = text-jailbreak→speech(primary) + StyleBreak식 감정(angry/sad 말투변형 +
+  CosyVoice2 감정렌더, secondary); acoustic/AdvWave 연기. 근거: Codex(gpt-5.6-sol xhigh) 3라운드 재논의
+  (A+ over-refusal spine 철회 → attack-flip mechanism-first), JALMBench(2505.17568) Qwen2-Audio
+  matched +0.4pp 정합, 4-agent 코드베이스 감사. §0 표·§1 가설·`design.md` §0 불변, matched-neutral
+  null은 boundary evidence로 보존.
