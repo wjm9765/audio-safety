@@ -34,6 +34,10 @@ pair_generation:
   temperature: 0.2
   timeout_s: 60.0
   retries: 2
+  # OpenRouter has no native Chat Batch API as of 2026-07-12. This bounded
+  # client-side worker pool sends independent /chat/completions requests in
+  # parallel while the coordinator alone checkpoints the output manifest.
+  max_concurrency: 8
   review_required: true
 
 style_variant_generation:
@@ -53,6 +57,7 @@ style_variant_generation:
   temperature: 0.2
   timeout_s: 60.0
   retries: 2
+  max_concurrency: 8
   review_required: true
 
 tts:

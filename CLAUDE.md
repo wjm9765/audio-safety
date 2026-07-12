@@ -34,3 +34,4 @@
 - `scripts/*.py`는 `#!/usr/bin/env -S uv run python` shebang과 executable bit를 유지한다. 실행 예시는 `./scripts/<name>.py ...` 형식을 우선 사용한다.
 - 이미 `uv sync`된 프로젝트 `.venv`가 있으면 그 환경을 우선 사용한다. 임시 `pip install`/임의 `uv pip install` 상태를 전제로 작업하지 말고, 필요한 의존성은 `pyproject.toml`/`uv.lock` 또는 해당 격리 setup 스크립트에 반영한다.
 - Codex 호출은 MCP(`mcp__codex__codex`)를 우선 사용하고, 없으면 `codex exec` CLI를 사용한다.
+- **모든 Codex 호출은 `model: gpt-5.6-sol` + `config.model_reasoning_effort: xhigh`로 한다 (2026-07-12 사용자 지정: "gpt 5.6 sol ultra").** `gpt-5.6-sol-ultra` 문자열은 ChatGPT 계정에서 거부되므로(400 not supported) callable id는 `gpt-5.6-sol`이고 "ultra"는 최고 reasoning effort(xhigh)로 매핑한다. 다른 모델로 대체하지 않는다.

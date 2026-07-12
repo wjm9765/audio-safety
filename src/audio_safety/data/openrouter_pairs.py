@@ -7,13 +7,18 @@ controls.
 
 import json
 import os
+import random
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable, Iterator
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
+from functools import partial
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, TypeVar, cast
 
 from audio_safety.config.schema import (
     OpenRouterPairGenerationConfig,
@@ -51,6 +56,134 @@ STYLE_GUIDES = {
 }
 
 SafetyLabel = Literal["harmful", "benign", "both"]
+JobT = TypeVar("JobT")
+ResultT = TypeVar("ResultT")
+
+
+def _run_concurrently(
+    jobs: list[JobT],
+    worker: Callable[[JobT], ResultT],
+    *,
+    max_concurrency: int,
+) -> Iterator[ResultT]:
+    """Yield independent OpenRouter jobs as they finish.
+
+    OpenRouter does not expose a native Chat Batch API. This bounded client-side
+    runner keeps network work in worker threads while its caller remains the only
+    writer of output/error manifests.
+    """
+    if not jobs:
+        return
+    if max_concurrency == 1:
+        for job in jobs:
+            yield worker(job)
+        return
+
+    workers = min(max_concurrency, len(jobs))
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="openrouter") as executor:
+        futures = [executor.submit(worker, job) for job in jobs]
+        for future in as_completed(futures):
+            yield future.result()
+
+
+def _retry_after_seconds(error: Exception) -> float | None:
+    if not isinstance(error, urllib.error.HTTPError):
+        return None
+    raw = error.headers.get("Retry-After")
+    if not raw:
+        return None
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        try:
+            retry_at = parsedate_to_datetime(raw)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if retry_at.tzinfo is None:
+            retry_at = retry_at.replace(tzinfo=UTC)
+        return max(0.0, (retry_at - datetime.now(UTC)).total_seconds())
+
+
+def _retry_delay_seconds(error: Exception, attempt: int) -> float:
+    retry_after = _retry_after_seconds(error)
+    if retry_after is not None:
+        return retry_after
+    base = min(60.0, float(2**attempt))
+    return base + random.uniform(0.0, min(1.0, base * 0.25))
+
+
+def _failure_action(
+    error: Exception,
+    *,
+    structured_output: bool,
+) -> Literal["format_fallback", "retry", "next_model", "fatal"]:
+    if isinstance(error, urllib.error.HTTPError):
+        if error.code in {401, 402, 403}:
+            return "fatal"
+        if error.code in {400, 422} and structured_output:
+            return "format_fallback"
+        if error.code in {408, 409, 425, 429} or error.code >= 500:
+            return "retry"
+        return "next_model"
+    if isinstance(error, (urllib.error.URLError, TimeoutError)):
+        return "retry"
+    if isinstance(error, (ValueError, json.JSONDecodeError)):
+        return "format_fallback" if structured_output else "retry"
+    return "fatal"
+
+
+def _call_with_model_fallback(
+    *,
+    models: list[str],
+    retries: int,
+    call: Callable[[str, bool], dict[str, Any]],
+) -> tuple[dict[str, Any], str, str]:
+    """Call one logical job with format fallback, retry, and model fallback.
+
+    Transport/rate-limit failures never trigger an immediate duplicate request
+    without structured output. That fallback is reserved for format/validation
+    failures, while retryable failures honor Retry-After or exponential backoff.
+    """
+    last_error: Exception | None = None
+    for model in models:
+        use_next_model = False
+        for attempt in range(retries + 1):
+            retry_error: Exception | None = None
+            for structured_output in (True, False):
+                try:
+                    result = call(model, structured_output)
+                    mode = "response_format_json" if structured_output else "prompt_json"
+                    return result, model, mode
+                except (
+                    urllib.error.URLError,
+                    TimeoutError,
+                    ValueError,
+                    json.JSONDecodeError,
+                ) as exc:
+                    last_error = exc
+                    action = _failure_action(exc, structured_output=structured_output)
+                    if action == "format_fallback":
+                        continue
+                    if action == "fatal":
+                        raise RuntimeError(f"OpenRouter request failed permanently: {exc}") from exc
+                    if action == "next_model":
+                        use_next_model = True
+                    else:
+                        retry_error = exc
+                    break
+
+            if use_next_model:
+                break
+            if attempt < retries:
+                error = retry_error or last_error
+                if error is not None:
+                    time.sleep(_retry_delay_seconds(error, attempt))
+        if use_next_model:
+            continue
+
+    raise RuntimeError(
+        "OpenRouter request exhausted all retries and fallback models"
+    ) from last_error
 
 
 def _request_json(
@@ -203,34 +336,26 @@ def generate_benign_pair(
     if not key:
         raise RuntimeError(f"{cfg.api_key_env} is required for OpenRouter pair generation")
 
-    models = [cfg.model, *cfg.fallback_models]
-    last_error: Exception | None = None
-    for model in models:
-        for attempt in range(cfg.retries + 1):
-            for structured_output in (True, False):
-                try:
-                    result = call_openrouter_pair_generator(
-                        row,
-                        cfg,
-                        model=model,
-                        api_key=key,
-                        structured_output=structured_output,
-                    )
-                    result["generation_model"] = model
-                    result["generation_mode"] = (
-                        "response_format_json" if structured_output else "prompt_json"
-                    )
-                    return result
-                except (
-                    urllib.error.URLError,
-                    TimeoutError,
-                    ValueError,
-                    json.JSONDecodeError,
-                ) as exc:
-                    last_error = exc
-            if attempt < cfg.retries:
-                time.sleep(1.0 + attempt)
-    raise RuntimeError(f"OpenRouter pair generation failed for {row['item_id']}") from last_error
+    def call(model: str, structured_output: bool) -> dict[str, Any]:
+        return call_openrouter_pair_generator(
+            row,
+            cfg,
+            model=model,
+            api_key=key,
+            structured_output=structured_output,
+        )
+
+    try:
+        result, model, mode = _call_with_model_fallback(
+            models=[cfg.model, *cfg.fallback_models],
+            retries=cfg.retries,
+            call=call,
+        )
+    except RuntimeError as exc:
+        raise RuntimeError(f"OpenRouter pair generation failed for {row['item_id']}") from exc
+    result["generation_model"] = model
+    result["generation_mode"] = mode
+    return cast(dict[str, str], result)
 
 
 def _record_to_pair(record: dict[str, Any]) -> AudioRdoPair:
@@ -248,19 +373,31 @@ def _error_manifest_path(output_path: Path) -> Path:
 
 
 def _progress(
-    rows: list[dict[str, str]],
+    items: Iterable[JobT],
     *,
+    description: str,
     total: int,
     initial: int,
     show_progress: bool,
-) -> Iterable[dict[str, str]]:
+) -> Iterable[JobT]:
     if not show_progress:
-        return rows
+        return items
     try:
         from tqdm.auto import tqdm
     except ImportError:
-        return rows
-    return tqdm(rows, desc="OpenRouter pairs", initial=initial, total=total, unit="pair")
+        return items
+    return tqdm(items, desc=description, initial=initial, total=total, unit="job")
+
+
+def _generate_pair_job(
+    row: dict[str, str],
+    *,
+    cfg: OpenRouterPairGenerationConfig,
+) -> tuple[dict[str, str], dict[str, str] | None, RuntimeError | None]:
+    try:
+        return row, generate_benign_pair(row, cfg), None
+    except RuntimeError as exc:
+        return row, None, exc
 
 
 def generate_pair_manifest(
@@ -278,14 +415,21 @@ def generate_pair_manifest(
     a provider failure does not discard already-generated pairs.
     """
     selected = seed_rows[:limit]
+    selected_order = [row["item_id"] for row in selected]
+    if len(selected_order) != len(set(selected_order)):
+        raise ValueError("pair-generation input contains duplicate item_id values")
+
     records: list[dict[str, Any]] = []
     if output_path.exists():
         records = load_jsonl(output_path)
 
-    selected_ids = {row["item_id"] for row in selected}
-    records = [record for record in records if str(record.get("item_id")) in selected_ids]
-    completed_ids = {str(record.get("item_id")) for record in records}
-    pairs = [_record_to_pair(record) for record in records]
+    selected_ids = set(selected_order)
+    records_by_id = {
+        str(record.get("item_id")): record
+        for record in records
+        if str(record.get("item_id")) in selected_ids
+    }
+    completed_ids = set(records_by_id)
     pending_rows = [row for row in selected if row["item_id"] not in completed_ids]
     error_path = _error_manifest_path(output_path)
     error_records = load_jsonl(error_path) if error_path.exists() else []
@@ -295,29 +439,42 @@ def generate_pair_manifest(
         if str(record.get("item_id")) in selected_ids
     }
 
-    for row in _progress(
+    worker = partial(_generate_pair_job, cfg=cfg)
+    results = _run_concurrently(
         pending_rows,
+        worker,
+        max_concurrency=cfg.max_concurrency,
+    )
+    for row, generated, error in _progress(
+        results,
+        description="OpenRouter pairs",
         total=len(selected),
         initial=len(completed_ids),
         show_progress=show_progress,
     ):
-        try:
-            generated = generate_benign_pair(row, cfg)
-        except RuntimeError as exc:
+        if error is not None:
             errors_by_id[row["item_id"]] = {
                 "item_id": row["item_id"],
                 "category": row["category"],
                 "harmful_text": row["harmful_text"],
                 "source": row["source"],
-                "error": str(exc),
+                "error": str(error),
                 "needs_pair_generation_retry": True,
             }
-            save_jsonl(errors_by_id.values(), error_path)
-            print(f"[pairs] skipped {row['item_id']}: {exc}", flush=True)
+            ordered_errors = [
+                errors_by_id[item_id] for item_id in selected_order if item_id in errors_by_id
+            ]
+            save_jsonl(ordered_errors, error_path)
+            print(f"[pairs] skipped {row['item_id']}: {error}", flush=True)
             continue
+        if generated is None:
+            raise AssertionError("OpenRouter pair job returned neither a result nor an error")
         if row["item_id"] in errors_by_id:
             del errors_by_id[row["item_id"]]
-            save_jsonl(errors_by_id.values(), error_path)
+            ordered_errors = [
+                errors_by_id[item_id] for item_id in selected_order if item_id in errors_by_id
+            ]
+            save_jsonl(ordered_errors, error_path)
         pair = AudioRdoPair(
             item_id=row["item_id"],
             category=generated["category"],
@@ -334,13 +491,18 @@ def generate_pair_manifest(
                 "needs_review": cfg.review_required,
             }
         )
-        records.append(record)
-        pairs.append(pair)
-        save_jsonl(records, output_path)
+        records_by_id[row["item_id"]] = record
+        ordered_records = [
+            records_by_id[item_id] for item_id in selected_order if item_id in records_by_id
+        ]
+        save_jsonl(ordered_records, output_path)
 
-    if not pending_rows and records:
-        save_jsonl(records, output_path)
-    return pairs
+    ordered_records = [
+        records_by_id[item_id] for item_id in selected_order if item_id in records_by_id
+    ]
+    if not pending_rows and ordered_records:
+        save_jsonl(ordered_records, output_path)
+    return [_record_to_pair(record) for record in ordered_records]
 
 
 def _as_bool(value: Any) -> bool:
@@ -443,37 +605,29 @@ def generate_style_variant(
     if not key:
         raise RuntimeError(f"{cfg.api_key_env} is required for OpenRouter style variants")
 
-    models = [cfg.model, *cfg.fallback_models]
-    last_error: Exception | None = None
-    for model in models:
-        for attempt in range(cfg.retries + 1):
-            for structured_output in (True, False):
-                try:
-                    result = call_openrouter_style_variant(
-                        row,
-                        cfg,
-                        style=style,
-                        model=model,
-                        api_key=key,
-                        structured_output=structured_output,
-                    )
-                    result["generation_model"] = model
-                    result["generation_mode"] = (
-                        "response_format_json" if structured_output else "prompt_json"
-                    )
-                    return result
-                except (
-                    urllib.error.URLError,
-                    TimeoutError,
-                    ValueError,
-                    json.JSONDecodeError,
-                ) as exc:
-                    last_error = exc
-            if attempt < cfg.retries:
-                time.sleep(1.0 + attempt)
-    raise RuntimeError(
-        f"OpenRouter style generation failed for {row['item_id']} style={style}"
-    ) from last_error
+    def call(model: str, structured_output: bool) -> dict[str, Any]:
+        return call_openrouter_style_variant(
+            row,
+            cfg,
+            style=style,
+            model=model,
+            api_key=key,
+            structured_output=structured_output,
+        )
+
+    try:
+        result, model, mode = _call_with_model_fallback(
+            models=[cfg.model, *cfg.fallback_models],
+            retries=cfg.retries,
+            call=call,
+        )
+    except RuntimeError as exc:
+        raise RuntimeError(
+            f"OpenRouter style generation failed for {row['item_id']} style={style}"
+        ) from exc
+    result["generation_model"] = model
+    result["generation_mode"] = mode
+    return result
 
 
 def style_rows_from_pairs(
@@ -481,11 +635,7 @@ def style_rows_from_pairs(
     *,
     safety_label: SafetyLabel = "both",
 ) -> list[dict[str, str]]:
-    labels: tuple[str, ...]
-    if safety_label == "both":
-        labels = ("harmful", "benign")
-    else:
-        labels = (safety_label,)
+    labels: tuple[str, ...] = ("harmful", "benign") if safety_label == "both" else (safety_label,)
 
     rows: list[dict[str, str]] = []
     for pair in pairs:
@@ -518,20 +668,16 @@ def style_rows_from_harmful_seeds(seed_rows: Iterable[dict[str, str]]) -> list[d
     return rows
 
 
-def _style_progress(
-    jobs: list[tuple[dict[str, str], str]],
+def _generate_style_job(
+    job: tuple[dict[str, str], str],
     *,
-    total: int,
-    initial: int,
-    show_progress: bool,
-) -> Iterable[tuple[dict[str, str], str]]:
-    if not show_progress:
-        return jobs
+    cfg: OpenRouterStyleVariantConfig,
+) -> tuple[dict[str, str], str, dict[str, Any] | None, RuntimeError | None]:
+    row, style = job
     try:
-        from tqdm.auto import tqdm
-    except ImportError:
-        return jobs
-    return tqdm(jobs, desc="OpenRouter style variants", initial=initial, total=total, unit="job")
+        return row, style, generate_style_variant(row, cfg, style=style), None
+    except RuntimeError as exc:
+        return row, style, None, exc
 
 
 def _style_record_key(record: dict[str, Any]) -> tuple[str, str, str]:
@@ -557,12 +703,19 @@ def generate_style_variant_manifest(
         raise ValueError("at least one target style is required")
 
     selected = source_rows[:limit]
+    if len(style_list) != len(set(style_list)):
+        raise ValueError("style list contains duplicate values")
     selected_keys = {(row["item_id"], row["safety_label"]) for row in selected}
+    if len(selected_keys) != len(selected):
+        raise ValueError("style-generation input contains duplicate item/safety-label keys")
     selected_styles = set(style_list)
+    ordered_job_keys = [
+        (row["item_id"], row["safety_label"], style) for row in selected for style in style_list
+    ]
 
     records: list[dict[str, Any]] = load_jsonl(output_path) if output_path.exists() else []
-    records = [
-        record
+    records_by_key = {
+        _style_record_key(record): record
         for record in records
         if (
             str(record.get("item_id")),
@@ -570,8 +723,8 @@ def generate_style_variant_manifest(
         )
         in selected_keys
         and str(record.get("target_style") or record.get("style")) in selected_styles
-    ]
-    completed = {_style_record_key(record) for record in records}
+    }
+    completed = set(records_by_key)
     pending_jobs = [
         (row, style)
         for row in selected
@@ -592,35 +745,48 @@ def generate_style_variant_manifest(
         and str(record.get("target_style") or record.get("style")) in selected_styles
     }
 
-    for row, style in _style_progress(
+    worker = partial(_generate_style_job, cfg=cfg)
+    results = _run_concurrently(
         pending_jobs,
+        worker,
+        max_concurrency=cfg.max_concurrency,
+    )
+    for row, style, generated, error in _progress(
+        results,
+        description="OpenRouter style variants",
         total=len(selected) * len(style_list),
         initial=len(completed),
         show_progress=show_progress,
     ):
         key = (row["item_id"], row["safety_label"], style)
-        try:
-            generated = generate_style_variant(row, cfg, style=style)
-        except RuntimeError as exc:
+        if error is not None:
             errors_by_key[key] = {
                 "item_id": row["item_id"],
                 "category": row["category"],
                 "safety_label": row["safety_label"],
                 "target_style": style,
                 "source": row["source"],
-                "error": str(exc),
+                "error": str(error),
                 "needs_style_generation_retry": True,
             }
-            save_jsonl(errors_by_key.values(), error_path)
+            ordered_errors = [
+                errors_by_key[job_key] for job_key in ordered_job_keys if job_key in errors_by_key
+            ]
+            save_jsonl(ordered_errors, error_path)
             print(
-                f"[style] skipped {row['item_id']} {row['safety_label']}/{style}: {exc}",
+                f"[style] skipped {row['item_id']} {row['safety_label']}/{style}: {error}",
                 flush=True,
             )
             continue
+        if generated is None:
+            raise AssertionError("OpenRouter style job returned neither a result nor an error")
 
         if key in errors_by_key:
             del errors_by_key[key]
-            save_jsonl(errors_by_key.values(), error_path)
+            ordered_errors = [
+                errors_by_key[job_key] for job_key in ordered_job_keys if job_key in errors_by_key
+            ]
+            save_jsonl(ordered_errors, error_path)
 
         record = {
             "item_id": row["item_id"],
@@ -639,9 +805,15 @@ def generate_style_variant_manifest(
             "generation_rationale": generated["rationale"],
             "needs_review": cfg.review_required,
         }
-        records.append(record)
-        save_jsonl(records, output_path)
+        records_by_key[key] = record
+        ordered_records = [
+            records_by_key[job_key] for job_key in ordered_job_keys if job_key in records_by_key
+        ]
+        save_jsonl(ordered_records, output_path)
 
-    if not pending_jobs and records:
-        save_jsonl(records, output_path)
-    return records
+    ordered_records = [
+        records_by_key[job_key] for job_key in ordered_job_keys if job_key in records_by_key
+    ]
+    if not pending_jobs and ordered_records:
+        save_jsonl(ordered_records, output_path)
+    return ordered_records

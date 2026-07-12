@@ -79,6 +79,14 @@ export OPENROUTER_API_KEY=<your_key>
   --config configs/experiments/exp1_refusal_cone_drift.yaml \
   --limit 150
 
+# OpenRouter has no native Chat Batch endpoint. The project therefore runs a
+# bounded client-side batch with 8 concurrent requests by default. Tune it if
+# the selected provider returns 429/503 responses:
+./scripts/prepare_audio_rdo_pairs.py \
+  --config configs/experiments/exp1_refusal_cone_drift.yaml \
+  --limit 150 \
+  --override dataset.pair_generation.max_concurrency=4
+
 # Review/edit $AUDIO_SAFETY_DATA_DIR/text/figstep/audio_rdo_pairs.jsonl.
 
 ./scripts/render_audio_rdo.py \

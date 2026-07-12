@@ -49,7 +49,22 @@ export OPENROUTER_API_KEY=<your_key>
 
 The OpenRouter prompt only asks for a benign control rewrite and explicitly
 forbids harmful answers, steps, code, materials, or operational details. Generated
-rows are marked `needs_review` by default.
+rows are marked `needs_review` by default. OpenRouter does not expose a native
+Chat Batch API, so this command uses a bounded client-side worker pool against
+`/api/v1/chat/completions`. The project config defaults to eight concurrent pair
+and style requests. Only the coordinator writes JSONL, completed rows are
+checkpointed immediately in deterministic source order, and reruns submit only
+pending jobs.
+
+If the selected provider rate-limits, lower concurrency without editing YAML:
+
+```bash
+./scripts/prepare_audio_rdo_pairs.py \
+  --config configs/experiments/exp1_refusal_cone_drift.yaml \
+  --limit 150 \
+  --override dataset.pair_generation.max_concurrency=4 \
+  --override dataset.style_variant_generation.max_concurrency=4
+```
 
 ## Audio Rendering
 

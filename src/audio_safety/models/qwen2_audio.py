@@ -334,6 +334,34 @@ def generate_audio_response(
     )[0]
 
 
+def generate_text_response(
+    model: Any,
+    processor: Any,
+    text: str,
+    *,
+    max_new_tokens: int = 128,
+    system_prompt: str = "You are a helpful assistant.",
+) -> str:
+    """Run one Qwen2-Audio generation on a pure-text ChatML prompt.
+
+    Used by the Run 4 text arm so matched harmful/benign content can be sent as
+    text instead of audio through the *same* LLM backbone, chat template, system
+    prompt, and decoding as ``generate_audio_response``. No audio is attached, so
+    inputs go through the tokenizer text path (``prepare_qwen2_text_inputs``).
+    """
+    conversation = build_text_conversation(text, system_prompt=system_prompt)
+    device = model_input_device(model)
+    inputs = prepare_qwen2_text_inputs(processor, conversation, device=device)
+    prompt_len = inputs.input_ids.shape[1]
+    generate_ids = model.generate(**inputs, max_new_tokens=max_new_tokens)
+    generate_ids = generate_ids[:, prompt_len:]
+    return processor.batch_decode(
+        generate_ids,
+        skip_special_tokens=True,
+        clean_up_tokenization_spaces=False,
+    )[0]
+
+
 def generate_audio_response_with_intervention(
     model: Any,
     processor: Any,

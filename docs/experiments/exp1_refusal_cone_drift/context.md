@@ -1,18 +1,23 @@
 # Audio-RDO Gate Context
 
-Last updated: 2026-07-08
+Last updated: 2026-07-12
 
 This file preserves the working context behind the current experiment rewrite. The
 folder name remains `exp1_refusal_cone_drift` for repository continuity, but the
-active first experiment is now the **Audio-RDO Refusal Axis Existence Gate**.
+completed first phase was the **Audio-RDO Refusal Axis Existence Gate** and the
+active next design is the Run 4 conversion/writer test audited below.
 
-## Current State (2026-07-08)
+## Current State (updated 2026-07-12)
 
 This run is a **direction-finding validation**, not the paper-facing final run.
 Its job is to settle two questions before we commit the paper's spine: (1) does a
 manipulable refusal axis exist in the LALM residual stream, and (2) is speech
 style what moves harmful audio off that axis? Answers below.
 
+- **Literature-audit status:** Runs 1–3 remain valid internal evidence, but the
+  2026-07-12 audit below found direct novelty collisions. `r_A` is now an
+  instrument for a narrower writer-bottleneck test, not the paper headline, and
+  the locked Run 4 design needs a dated amendment before execution.
 - **Latest run:** `exp1_20260707_1557_allpos_rebuttal_l12nbhd` (all-position
   operator). Full detail in the run section below and in [results.md](./results.md).
 - **Key finding (the anchor): a manipulable audio-conditioned refusal axis
@@ -22,7 +27,8 @@ style what moves harmful audio off that axis? Answers below.
   number. With the all-token operator, addition also clears the preregistered bar
   (`+20.7pp >= +20`) while benign over-refusal stays flat (`+0.05pp`). So the
   axis is real and causal in both directions (add refusal / ablate refusal),
-  benign-controlled. This is the point the paper leads with.
+  benign-controlled. This anchors the completed direction-finding phase; it is
+  not sufficient as the final paper novelty.
 - **Hypothesis tested and NOT supported: speech style does not move harmful audio
   off this refusal axis.** The original guess — that `sad`/`angry` style pushes
   harmful audio away from the refusal coordinate and thereby flips refusal — does
@@ -39,10 +45,11 @@ style what moves harmful audio off that axis? Answers below.
   goalpost. No §0 NO-GO trigger fires (RDO does not fail like DIM; benign ORR is
   controlled; style effect is not decoding failure; there is no escape correlation
   left unrestored; SARSteer-text does not dominate).
-- **Honest paper spine now:** *"Gradient-optimized audio-conditioned refusal axes
-  exist in LALMs — and speech-style jailbreaks do NOT work by escaping them."*
-  A found-axis result plus a mechanistic negative on the style-escape hypothesis.
-  **Do not claim style-mediated refusal escape.**
+- **Run 1–3 conclusion:** *A gradient-optimized audio-conditioned refusal axis
+  exists in Qwen2-Audio, while the tested sad/angry style effect is not mediated
+  by that axis.* This remains a valid result, but the broader axis-first paper
+  spine is superseded by the 2026-07-12 audit. **Do not claim that prosody or
+  acoustic style in general has been ruled out.**
 - **Deferred to the paper-facing run (NOT required for this direction decision).**
   These are writeup-hardening steps, explicitly out of scope for the validation
   phase; noted here only so they are not forgotten when the claim is drafted:
@@ -66,9 +73,10 @@ runs incl. gpt-5.5/xhigh + two literature surveys, debated and reconciled).
 
 ### Convergent answer
 
-All independent sources ranked the same leading mechanism and the same decisive
-experiment. The style/prosody channel is already ruled out as primary by our own
-data (escape AUROC ~0.48). Ranked mechanistic hypotheses (residual-stream level):
+The 2026-07-08 review ranked the following mechanism and experiment first. Our
+data downrank the tested sad/angry effect *through `r_A`* (escape AUROC ~0.48);
+they do not rule out other prosodic or acoustic mechanisms. Ranked hypotheses
+(residual-stream level):
 
 1. **[LEAD] Refusal under-activation / harmfulness→refusal conversion failure.**
    The audio pathway carries the request's harmfulness but writes too little onto
@@ -88,18 +96,16 @@ data (escape AUROC ~0.48). Ranked mechanistic hypotheses (residual-stream level)
 6. Prosody (already downranked by our AUROC ~0.48). 7. Pure artifact
    (ASR/judge/decoding/acoustic confounds).
 
-### Novelty (survey verdict)
+### Novelty (2026-07-08 provisional verdict; superseded)
 
-**OPEN for audio.** The vision analog is largely taken — Safety Geometry Collapse
-(arXiv:2605.18104), ShiftDC (2502.13095), Cross-Modal Safety Mechanism Transfer
-(2410.12662) all show non-text inputs under-project onto a still-causal refusal
-direction. For audio the closest are: `2604.16659` (refusal-direction projection,
-audio "distant from the refusal boundary" — but scoped to *fine-tuning erosion*,
-not the base-model modality gap) and SARSteer (argues a *different* geometry —
-audio harmful/safe *more* separable, "no shared subspace"). **No one has projected
-matched harmful text vs audio onto an ablation-verified, audio-reachable refusal
-axis and shown under-activation is the causal driver while ruling out prosody.**
-That conjunction is the paper.
+The initial survey judged the audio version open. The broader search completed
+on 2026-07-12 found direct collisions, especially *A Unified Safety Subspace
+Exists in Speech Language Models*, *Acoustic Interference*, SARSteer, and the
+cross-domain conversion framing in *Low-Resource Safety Failures Are Action
+Failures, Not Representation Failures* and HARC. The valid remaining novelty is
+the narrower conjunction of causal harmfulness validation, generic-offset and
+calibration controls, source-level writer localization, and coordinate-only gap
+closure on fresh matched speech/text data. See the dated audit below.
 
 ### The decisive experiment (the missing measurement: add the TEXT arm)
 
@@ -119,10 +125,12 @@ the hooks, and the existing harmful/benign pairs. Design (sharpened in debate):
   equal harmfulness `c_H`, audio writes less refusal (`Δc_A_audio << Δc_A_text`)
   at the refusal-writing layers — this tests the *conversion*, not mere
   coexistence of two coordinates.
-- **Causal test:** NATURAL (measured) bidirectional `r_A`-coordinate swap — clamp
-  audio's measured `c_A` up to text's measured `c_A` (and text down to audio's).
-  Key statistic = **mediation fraction of the paired behavioral gap**. Must use
-  measured values, not an override, or it only proves controllability.
+- **Original causal-test proposal:** a measured, bidirectional `r_A` coordinate
+  swap — clamp audio's `c_A` toward the paired text value and text toward the
+  paired audio value. The 2026-07-12 audit narrows the interpretation: measured
+  targets alone do not make a repeated clamp “natural mediation”; absolute
+  writer-local gap closure is primary and sustained clamp closure is an upper
+  bound.
 
 ### Confound killers and precise falsifiers (from the adversarial round)
 
@@ -146,18 +154,19 @@ the hooks, and the existing harmful/benign pairs. Design (sharpened in debate):
 ### How this reframes the paper
 
 `r_A` (the WEAK-GO result) becomes the **instrument**, not the headline. The
-spine becomes causal: *"In LALMs, harmful speech is represented as harmful but
-under-activates a text/audio-reachable refusal axis; this conversion gap — not
-prosody — is why audio jailbreaks beat matched text."* The prosody negative and
-the WEAK-GO axis both become supporting results. (Note: say "text/audio-reachable
-refusal axis," not "text-trained axis," until `r_T` alignment is shown — see Run 4.)
+Run 3 style negative and axis result are supporting evidence. The stronger
+conversion/writer claim remains conditional on the confound controls and causal
+tests in the 2026-07-12 audit; until then, do not claim that the conversion gap
+causes the modality vulnerability or that prosody is ruled out.
 
 ### Run 4 pre-registration (2026-07-08) — the decided next experiment
 
 Locked in [run4_conversion_gap_design.md](./run4_conversion_gap_design.md). Run 4
 is the single next action; do NOT add style variants or run an RDO-vs-MDSteer
 strength sweep first. It does not edit design.md §0 (separate hypothesis set).
-Key decisions (the adversarial-review feedback folded in minimally):
+The bullets below record the 2026-07-08 version. **Do not execute it until the
+2026-07-12 audit changes are accepted, entered in its change history, and
+re-locked.** Key decisions at that time were:
 
 - **The missing piece = the TEXT arm.** We only ever ran audio. Run 4 puts the
   same harmful/benign content through text and audio and compares the refusal
@@ -187,25 +196,276 @@ Key decisions (the adversarial-review feedback folded in minimally):
 - **Before running:** lock these thresholds (done) and `/codex-cross-check` the
   decision logic blind.
 
-## Current Thesis
+## External literature audit and Run 4 hardening (2026-07-12)
 
-The first paper claim should not start from a multi-cone defense. The first gate
-is narrower:
+> **Status:** This is a literature-driven design audit, not a silent edit to the
+> locked Run 4 preregistration. It supersedes the broad 2026-07-08 novelty
+> assessment in this context file, but does not itself change
+> [run4_conversion_gap_design.md](./run4_conversion_gap_design.md). Before any
+> Run 4 data are generated, the accepted changes below must be written into that
+> document with a dated change history and the design re-locked.
 
-> Does Qwen2-Audio contain a manipulable audio-conditioned refusal axis in the
-> LLM residual stream when the axis is optimized with RDO-style gradients rather
-> than constructed with difference-in-means?
+### Executive decision
 
-If this gate fails, style-aware defenses, multi-cone geometry, and token-local
-interventions should be treated as downstream pivots rather than current claims.
+The causal question remains strong, but **Run 4 as currently written is not yet
+ICLR-ready**. The broad statement “harmfulness is represented but is not
+converted into refusal” is no longer novel by itself. The same representation-
+to-action framing has now been reported across 23 languages in
+[Low-Resource Safety Failures Are Action Failures, Not Representation
+Failures](https://arxiv.org/abs/2606.01196), and [HARC](https://arxiv.org/abs/2607.00572)
+separates prompt- and response-side harmfulness/refusal directions across five
+model families. In audio, shared/cross-modal safety steering, refusal-coordinate
+drift, and activation patching have also already appeared.
 
-The intended paper spine is:
+The defensible paper is therefore not “we found an audio refusal axis” or “audio
+under-activates safety.” The surviving target claim is narrower:
 
-> Large Audio-Language Models contain audio-conditioned refusal coordinates in
-> the LLM residual stream, but speech style can move harmful audio away from
-> these coordinates while preserving transcript semantics. This style-induced
-> escape is missed by text-derived steering and can be causally restored by
-> patching the validated audio-native refusal coordinate.
+> On strictly matched text–speech content, after ruling out semantic loss,
+> generic modality offset, and readout-threshold miscalibration, harmful speech
+> induces an architecture-dependent **harmfulness-to-refusal writer deficit** at
+> identifiable components. A minimal, writer-local intervention that changes
+> only the behaviorally load-bearing refusal coordinate closes a preregistered
+> part of the paired safety gap on untouched data.
+
+This target is still open enough to support an ICLR mechanistic paper. It is a
+hypothesis to test, not a conclusion licensed by Runs 1–3.
+
+### Closest novelty threats and the remaining distinction
+
+| Work | What is already demonstrated | Consequence for Run 4 |
+|---|---|---|
+| [A Unified Safety Subspace Exists in Speech Language Models](https://www.researchgate.net/publication/405947813_A_Unified_Safety_Subspace_Exists_in_Speech_Language_Models) (author-uploaded early preprint, 2026-06-04) | Qwen2-Audio and GLM-4-Voice, audio/text safety vectors, and cross-modal refusal/compliance steering | Do not claim the first shared audio–text safety subspace or first cross-modal audio refusal steering. Differentiate with an independently validated harmfulness variable, exact content pairing, writer localization, and untouched confirmation. |
+| [Acoustic Interference](https://arxiv.org/abs/2605.18168) (ICML 2026) | Late-layer movement along a text-derived refusal vector under audio interference and bidirectional text↔audio full-residual patching | Do not claim the first audio refusal under-activation or the first text/audio activation patch. The remaining distinction is clean harmful speech, coordinate-only/source-local intervention, and an explicit harmfulness→refusal test. |
+| [SARSteer](https://arxiv.org/abs/2510.17633) (ICML 2026) | Audio/text activation discrepancy, text-derived refusal steering, audio-side safety steering, multi-model/multi-dataset evaluation, utility and human auditing | Treat SARSteer as a direct functional baseline. One model, one renderer, one seed, and heuristic refusal labels are no longer competitive evidence. |
+| [SPIRIT](https://aclanthology.org/2025.emnlp-main.734/) (EMNLP 2025) | Activation-patching-based protection for speech language models | The intervention must be presented as a causal diagnostic unless it is compared as a defense on safety, utility, and cost. |
+| [Audio Is the Achilles' Heel](https://aclanthology.org/2025.naacl-long.470/) (NAACL 2025) | Matched harmful text/audio vulnerability and safety changes from silent or meaningless audio | Add mixed-input controls; otherwise an “audio conversion gap” may just be audio-branch gating. |
+| [Safety Geometry Collapse](https://arxiv.org/abs/2605.18104) (2026-05-18), [ShiftDC](https://arxiv.org/abs/2502.13095), and [MARS](https://arxiv.org/abs/2606.31876) | Generic non-text modality drift, refusal-separation collapse, recentering, and drift correction | A raw projection gap is insufficient. Show that the harmfulness-conditional refusal gap survives centering and simple drift/calibration corrections. |
+| [Benign Fine-Tuning Breaks Safety Alignment in Audio LLMs](https://arxiv.org/abs/2604.16659) (2026-04-17) | Audio late-layer refusal suppression with preserved encoder representations, with architecture-dependent patterns | The base-model setting is different, but the general late-layer suppression claim overlaps. Replication on a distinct architecture is required. |
+| [LLMs Encode Harmfulness and Refusal Separately](https://arxiv.org/abs/2507.11878) (v5, 2026-07-06) and [HARC](https://arxiv.org/abs/2607.00572) (v3, 2026-07-08) | Harmfulness/refusal dissociation, position dependence, and response-side safety geometry | Measuring both concepts only at P2 is no longer adequate; prompt, decision, and response positions must be separated. |
+| [The Curse of Multiple Mediators](https://arxiv.org/abs/2606.27510) (2026-06-25) | Activation-patching effects contain mediator–bypass and higher-order interaction effects | Do not call an all-position clamp a natural indirect effect or formal mediation fraction. Measure interaction and use controlled gap-closure language. |
+
+The 2026 direct competitors invalidate the previous sentence that “no one has
+projected matched harmful text vs audio onto a refusal axis” as a broad novelty
+claim. They do **not** yet establish the full conjunction of (i) exact clean
+speech/text content matching, (ii) separately and causally validated
+harmfulness, (iii) generic modality-drift and threshold-calibration controls,
+(iv) source-level writer localization, and (v) coordinate-only behavioral gap
+closure on fresh held-out data. That conjunction is the paper's remaining
+novelty opportunity.
+
+### Required changes before Run 4 starts
+
+1. **Add T0, the behavioral total-effect gate.** First establish that matched
+   harmful text has a reliably higher safe-refusal rate / lower harmful-
+   compliance rate than matched speech. Report the paired risk difference and a
+   two-sided confidence interval. Pre-register a minimum eligible base gap from
+   a power analysis; if the base gap is near zero, no gap-closure ratio is
+   interpretable.
+
+2. **Use a genuinely untouched confirmatory set.** Runs 1–3 have already exposed
+   the current 150 pairs and informed the new thesis, axis, layers, and operator.
+   Treat them as discovery data. Split axis training, layer selection, and final
+   testing by source/category/template, then evaluate once on new items. Nested
+   cross-fitting is an acceptable fallback, but it is weaker than a fresh
+   external confirmation set.
+
+3. **Make harmfulness preservation a non-inferiority claim, not an AUROC floor.**
+   `AUROC_audio >= 0.75` can pass even when audio semantics are substantially
+   degraded relative to text. Train/evaluate a common `r_H` with text→audio and
+   audio→text transfer, category-held-out testing, lower confidence bounds, and
+   a preregistered text-vs-audio non-inferiority/equivalence margin. Include the
+   harm × behavior cells (harmful-refused, harmful-complied, benign-answered,
+   benign-overrefused) and a causal harm-judgment/reply-inversion assay so the
+   probe is not merely reading planned refusal.
+
+4. **Separate safety concepts by position.** Measure prompt harmfulness at the
+   last semantic-content boundary (plus content-token pooling as sensitivity),
+   refusal at the common assistant boundary/P2, and both trajectories over the
+   first 16–32 response tokens. Use a common teacher-forced response prefix for
+   cross-modal trajectory comparisons after free generations diverge. This
+   distinguishes failed conversion from delayed conversion.
+
+5. **Replace the raw modality gap with a conditional contrast.** The primary
+   refusal-separation estimand should remove the generic text/audio offset:
+
+   ```text
+   G_R = [(c_R,harmful - c_R,benign)_text
+          - (c_R,harmful - c_R,benign)_audio]
+
+   W_l = [(Delta c_R,harmful - Delta c_R,benign)_text
+          - (Delta c_R,harmful - Delta c_R,benign)_audio]
+   ```
+
+   Keep the raw harmful text–audio projection difference as descriptive. Report
+   results before and after benign/neutral modality-mean centering, affine or
+   RMSNorm-space normalization, and angle-versus-magnitude decomposition. Add a
+   ShiftDC/ReGap-style drift correction and a few-shot audio threshold-
+   recalibration baseline. If either simple baseline closes the behavioral gap,
+   “writer failure” is not the preferred explanation.
+
+6. **Add mixed-input and semantic-fidelity controls.** At minimum compare
+   text-only, harmful-speech-only, harmful text + silence, harmful text + neutral
+   or non-speech audio, audio + visible transcript, and the model's own
+   transcript fed back as text. Lock the same system/chat framing and decoding.
+   Record WER, preservation of safety-critical terms and intent, duration,
+   loudness, speaker, and decoding failures. Report both all-item intent-to-test
+   and fidelity-filtered analyses.
+
+7. **Upgrade the writer analysis from association to causal localization.** A
+   regression of `Delta c_R` on modality conditional on `c_H` is supporting
+   association and can condition on a post-treatment variable. Decompose
+   residual writes into attention output, MLP output, and any audio
+   projector/interface component. At the selected source, replace only the
+   audio component's `r_R` write with the paired text value and test downstream
+   `c_R`, first-token refusal logit margin, and full behavior. Include
+   wrong-layer, wrong-position, shuffled-pair, and norm/covariance-matched random
+   controls.
+
+8. **Test coordinate interactions and preserve non-target coordinates.** Report
+   the angles among `r_H`, `r_R`, and a modality direction. Run no intervention,
+   `H` only, `R` only, and `H+R`, plus orthogonalized/constrained `H-perp-R` and
+   `R-perp-H` sensitivities. A primary `r_R` update should preserve `c_H`, hidden
+   norm, and as much off-target state as possible. Report intervention distance,
+   output KL/coherence, and the interaction contrast; orthogonality alone is not
+   evidence of causal independence.
+
+9. **Rename and factor T4.** `MF = (Gap_base - Gap_clamp) / Gap_base` is a
+   **gap-closure fraction under a controlled clamp**, not a natural mediation
+   fraction. Make the absolute paired change in harmful compliance / safe
+   refusal the primary outcome and the ratio secondary, only when T0 passes.
+   Factor the operator into P2-only, prefill-only, generated-token-only,
+   writer-local, and sustained-decode conditions. The all-position clamp is a
+   sufficiency upper bound. A conversion-mechanism claim requires the
+   writer-local condition to reproduce a meaningful part of the effect.
+
+10. **Specify the persistent target under unequal sequence lengths.** Text and
+    audio prefill positions do not align, and their free-generation trajectories
+    diverge. Pre-register whether sustained steering repeats the paired P2
+    difference, clamps to a fixed text-derived band, or uses a teacher-forced
+    shadow text trajectory. Separate prefill from decoding and retain the
+    bidirectional audio-up/text-down intervention. Do not describe a repeated
+    target as “natural” merely because its scalar came from a natural example.
+
+11. **Operationalize every decision rule.** Replace `r_R gap >> r_H gap ≈
+    random` with numerical contrasts, confidence intervals, an equivalence
+    margin, and a norm/covariance-matched empirical null. Eight random directions
+    cannot support a 0.05 Monte Carlo test (`1/(8+1) = 0.111`); use at least 99,
+    preferably 999, or label-permutation directions. Lock one primary
+    axis/layer/position/endpoint, a deterministic layer-selection and tie-break
+    rule that never uses the final mediation outcome, exclusions, decoding-
+    failure handling, and the status of all secondary layer/position maps.
+
+12. **Use paired, clustered inference and power the estimand that matters.** The
+    semantic item is the sampling unit. Use paired randomization or exact
+    McNemar tests and paired risk-difference intervals for binary behavior;
+    bootstrap items/categories rather than generated rows. Repeated speakers and
+    decodes need a hierarchical or cluster-robust analysis. Include uncertainty
+    from retrained directions/seeds, and simulate power for the raw percentage-
+    point gap closure rather than assuming `n=150` is sufficient for a ratio.
+
+13. **Replicate beyond one model, dataset, and renderer.** Keep Qwen2-Audio as
+    the deep discovery model, then preregister confirmation on at least one
+    structurally different open LALM such as Qwen2.5-Omni or GLM-4-Voice. Use at
+    least two safety sources with category/source-held-out evaluation, unseen
+    speakers, multiple voices and preferably a second TTS engine plus a small
+    natural/human-speech subset. [JALMBench](https://openreview.net/forum?id=DJkQ236C8B)
+    illustrates the current breadth of audio-safety evaluation; a one-model
+    result must be explicitly framed as a Qwen2-Audio case study.
+
+14. **Evaluate real safety, not refusal wording.** Preserve the four-way labels
+    but add an ordinal audit that distinguishes full refusal, safe redirection,
+    hedge-but-help, partial compliance, and full harmful compliance. Use two
+    independent strong evaluators, a modality/condition-blinded stratified human
+    audit with two raters plus adjudication, and report agreement. Include hard
+    benign/borderline-safe prompts (e.g. XSTest/OR-Bench style) and general audio
+    utility, not only generic benign ORR. Store raw outputs, judge prompts/scores,
+    and disagreements.
+
+15. **Show that the RDO coordinate is naturally used and stable.** RDO finds a
+    strong control vector; that does not automatically make it a native
+    mediator. Require untouched-data prediction, small-dose bidirectional
+    necessity/sufficiency, multiple RDO restarts, stability across refusal-target
+    paraphrases, and evidence that natural writer components feed this
+    coordinate. Keep frozen `r_A` as the preregistered primary instrument, but
+    report `r_T`, difference-in-means, and low-rank/cone sensitivity because
+    refusal need not be universally one-dimensional.
+
+### Minimum ICLR-credible package
+
+The minimum package is:
+
+- Qwen2-Audio deep causal localization plus one architecture-diverse
+  confirmatory model;
+- a new category/source-held-out paired corpus, at least one external safety
+  source, multiple speakers/renderers, and a natural-speech subset;
+- T0, position-specific and causally validated harmfulness, centered
+  harmfulness-conditional refusal/writer contrasts, and calibration/drift
+  baselines;
+- a writer-local coordinate intervention with factorial and sham controls, with
+  sustained all-position steering demoted to an upper bound;
+- paired/clustered inference, seed and learned-axis stability, robust harmful-
+  compliance judging, blinded human validation, hard-benign safety, and general
+  utility;
+- immutable preregistration/change history, config/model/TTS/git revisions,
+  split and exclusion manifests, raw outputs and annotations, and a complete
+  reproduction command. These directly address the ICLR 2026 criteria of a
+  specific question, sound literature placement, rigorous claim support,
+  significance, and reproducibility in the
+  [Reviewer Guide](https://iclr.cc/Conferences/2026/ReviewerGuide).
+
+With this package, the project can be differentiated as a causal-mechanism paper
+rather than another audio benchmark or steering defense. Without it, the current
+“Qwen2-Audio + reused pairs + raw P2 projection + all-position clamp + heuristic
+judge” configuration is best treated as a strong pilot/case study, not an
+ICLR-level confirmatory result.
+
+### Interpretation and claim boundary
+
+- If audio harmfulness fails non-inferiority and an `r_H` intervention restores
+  refusal, reframe the result as upstream perception/semantic degradation.
+- If the refusal gap disappears after centering or threshold recalibration,
+  reframe it as modality offset/readout calibration.
+- If only a sustained all-position clamp works, claim controllability or an
+  upper-bound intervention, not native mediation or writer localization.
+- If a source-local `r_R` intervention closes the gap only in Qwen2-Audio, claim
+  an architecture-specific case study.
+- Only if harmfulness is independently preserved, centered conditional writer
+  deficits replicate, and minimal source-local interventions close behavior
+  across architectures may the paper use the audio-conditioned writer-
+  bottleneck claim.
+
+Even under the strongest positive result, do not write that the model “knows the
+request is harmful but chooses not to refuse.” The supported wording is:
+
+> Harmfulness is recoverable and causally validated in the tested
+> audio-conditioned states, while the audio pathway writes less onto a
+> behaviorally load-bearing refusal coordinate than matched text. Controlled
+> restoration of that coordinate closes a preregistered part of the paired
+> safety gap.
+
+Finally, the Run 3 negative licenses only “the tested sad/angry variants were not
+mediated by `r_A`.” It does not rule out prosody, acoustic latent semantics, or
+style attacks in general; [StyleBreak](https://arxiv.org/abs/2511.10692) and
+[Acoustic Interference](https://arxiv.org/abs/2605.18168) make that broader claim
+untenable.
+
+## Current Thesis (updated 2026-07-12)
+
+Runs 1–3 established `r_A` as a useful causal instrument in Qwen2-Audio, not as
+the final paper contribution. They also rejected the tested style-escape
+mediation account. In light of the literature audit above, the paper-facing
+question is now:
+
+> After semantic fidelity, generic modality shift, and decision-threshold
+> calibration are controlled, does matched harmful speech produce a smaller
+> source-level write from harmfulness into a behaviorally load-bearing refusal
+> coordinate than text, and can a minimal writer-local intervention close the
+> paired behavioral gap?
+
+This is the Run 4 hypothesis, not an established project result. The final claim
+must be chosen from the interpretation branches above after untouched,
+multi-architecture confirmation. The broad axis-existence and style-escape
+spines are superseded.
 
 ## Research Discipline
 
@@ -218,8 +478,9 @@ The intended paper spine is:
   - `benign_answer`
   - `decoding_failure`
 - Exclude `decoding_failure` from geometry analysis and report it separately.
-- Keep token-aware interventions for a later phase. The first gate is axis-level
-  causal mediation only.
+- For Run 4, keep P2 as the preregistered decision anchor but include the
+  position-specific harmfulness measurement, response trajectory, and
+  writer-local intervention required by the 2026-07-12 audit.
 
 ## Source Mapping
 
@@ -935,7 +1196,7 @@ Open issues before a paper-facing claim:
 
 ## Current Implementation Status
 
-Current server-oriented implementation snapshot, 2026-07-05:
+Current server-oriented implementation snapshot, updated 2026-07-12:
 
 - Raw data, cache, and run outputs default to `/workspace/audio_safety_data`.
   The git checkout remains `/workspace/audio-safety`.
@@ -946,6 +1207,13 @@ Current server-oriented implementation snapshot, 2026-07-05:
 - OpenRouter pair generation is resumable. Per-row OpenRouter failures are
   written to a sidecar `.errors.jsonl` instead of aborting the whole run, and a
   later successful retry clears that stale sidecar entry.
+- OpenRouter has no native Chat Batch endpoint in its 2026-07-12 public OpenAPI.
+  Pair and style preparation therefore use a bounded client-side concurrent
+  runner (`max_concurrency: 8` in the project dataset config). Workers perform
+  only network calls; the coordinator checkpoints completed jobs immediately,
+  rewrites manifests in deterministic source order, preserves resume behavior,
+  and honors `Retry-After`/backoff on transient failures. Use a dotted CLI
+  override to reduce concurrency for rate-limited providers.
 - OpenRouter style-variant generation is also resumable and now lives in the
   same data-preparation path as pair generation:
   `./scripts/prepare_audio_rdo_pairs.py --style-variants`. It writes

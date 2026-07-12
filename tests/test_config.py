@@ -19,7 +19,9 @@ def test_exp1_config_loads():
     assert str(cfg.dataset.source_file) == "text/figstep/audio_rdo_pairs.jsonl"
     assert cfg.dataset.pair_generation.model == "z-ai/glm-5.2"
     assert cfg.dataset.pair_generation.api_key_env == "OPENROUTER_API_KEY"
+    assert cfg.dataset.pair_generation.max_concurrency == 8
     assert cfg.dataset.style_variant_generation.styles == ["sad", "angry"]
+    assert cfg.dataset.style_variant_generation.max_concurrency == 8
     assert (
         str(cfg.dataset.style_variant_generation.output_file)
         == "text/figstep/audio_rdo_style_variants.jsonl"
@@ -69,11 +71,13 @@ def test_dotted_overrides():
             "stats.n_permutations=100",
             "seed=7",
             "dataset.styles=[neutral,angry]",
+            "dataset.pair_generation.max_concurrency=3",
         ],
     )
     assert cfg.stats.n_permutations == 100
     assert cfg.seed == 7
     assert cfg.dataset.styles == ["neutral", "angry"]
+    assert cfg.dataset.pair_generation.max_concurrency == 3
 
 
 def test_unknown_key_rejected(tmp_path: Path):

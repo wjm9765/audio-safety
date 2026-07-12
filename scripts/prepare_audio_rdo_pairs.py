@@ -26,6 +26,12 @@ from audio_safety.utils.paths import resolve_paths
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, required=True, help="experiment YAML")
+    parser.add_argument(
+        "--override",
+        action="append",
+        default=[],
+        help="dotted config override, e.g. dataset.pair_generation.max_concurrency=4",
+    )
     parser.add_argument("--data-dir", type=Path, default=None, help="override data root")
     parser.add_argument("--limit", type=int, default=None, help="max seed rows to generate")
     parser.add_argument(
@@ -99,7 +105,7 @@ def ensure_seed_file(seed_path: Path, cache_dir: Path, *, source: str, source_ur
 
 def main() -> None:
     args = parse_args()
-    cfg = load_experiment_config(args.config)
+    cfg = load_experiment_config(args.config, overrides=args.override)
     paths = resolve_paths(cfg.paths, data_dir=args.data_dir)
     seed_path = paths.data_dir / cfg.dataset.seed_file
     output_path = paths.data_dir / cfg.dataset.source_file

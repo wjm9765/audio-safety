@@ -11,6 +11,7 @@ All functions are pure numpy so they run (and are unit-tested) without a GPU.
 """
 
 from collections.abc import Mapping, Sequence
+from math import comb
 
 import numpy as np
 
@@ -121,3 +122,124 @@ def bootstrap_cosine_ci(
         stats[t] = mean_pairwise_cosine(family_profiles(samples[idx], families))
     lo, hi = np.quantile(stats, [alpha / 2, 1 - alpha / 2])
     return float(lo), float(hi)
+
+
+# --- Paired binary inference (Run 4 Stage A / T0 behavioral gate) -------------
+#
+# These are pure numpy/math so they run and are unit-tested without a GPU. The
+# sampling unit is the semantic item (a matched harmful/benign pair rendered to
+# both text and audio); paired tests condition on the item so per-item audio-vs-
+# text flips drive the inference, not marginal rates.
+
+
+def _binom_sf_at_least(k: int, n: int, p: float = 0.5) -> float:
+    """Exact P(X >= k) for X ~ Binomial(n, p). n is small (discordant pairs)."""
+    if k <= 0:
+        return 1.0
+    if k > n:
+        return 0.0
+    return float(sum(comb(n, i) * p**i * (1.0 - p) ** (n - i) for i in range(k, n + 1)))
+
+
+def mcnemar_exact(audio_only: int, text_only: int) -> dict[str, float]:
+    """Exact McNemar test on paired binary outcomes.
+
+    ``audio_only`` = number of items where the audio arm succeeded (e.g. attack
+    success / harmful compliance) and the text arm did not; ``text_only`` = the
+    reverse. Only discordant pairs are informative. Under H0 each discordant pair
+    is an independent fair coin, so:
+
+    - ``p_two_sided`` tests audio != text (concordant-invariant),
+    - ``p_one_sided_audio_gt_text`` = P(>= audio_only audio-favoring flips) tests
+      the pre-registered direction audio > text.
+
+    Returns a dict (also carries the raw discordant counts for auditability).
+    """
+    if audio_only < 0 or text_only < 0:
+        raise ValueError("discordant counts must be non-negative")
+    n_disc = audio_only + text_only
+    if n_disc == 0:
+        return {
+            "n_discordant": 0,
+            "audio_only": 0,
+            "text_only": 0,
+            "p_two_sided": 1.0,
+            "p_one_sided_audio_gt_text": 1.0,
+        }
+    p_one = _binom_sf_at_least(audio_only, n_disc, 0.5)
+    # Exact two-sided McNemar: sum of binomial masses <= the observed tail mass.
+    k = min(audio_only, text_only)
+    p_two = min(1.0, 2.0 * _binom_sf_at_least(max(audio_only, text_only), n_disc, 0.5))
+    if audio_only == text_only:
+        p_two = 1.0
+    return {
+        "n_discordant": int(n_disc),
+        "audio_only": int(audio_only),
+        "text_only": int(text_only),
+        "p_two_sided": float(p_two),
+        "p_one_sided_audio_gt_text": float(p_one),
+        "concordant_note_k_min": int(k),
+    }
+
+
+def paired_risk_difference_ci(
+    audio_outcomes: Sequence[int],
+    text_outcomes: Sequence[int],
+    *,
+    n_bootstrap: int = 2000,
+    alpha: float = 0.05,
+    seed: int = 0,
+) -> dict[str, float]:
+    """Paired risk difference RD = rate(audio) - rate(text) with a percentile
+    bootstrap CI that resamples ITEMS (rows) with replacement, preserving the
+    paired structure. Inputs are 0/1 arrays of equal length, aligned by item.
+    """
+    audio = np.asarray(audio_outcomes, dtype=float)
+    text = np.asarray(text_outcomes, dtype=float)
+    if audio.shape != text.shape or audio.ndim != 1:
+        raise ValueError("audio and text outcomes must be equal-length 1-D arrays")
+    n = audio.shape[0]
+    if n == 0:
+        raise ValueError("need at least one paired item for a risk difference")
+    rd = float(audio.mean() - text.mean())
+    rng = np.random.default_rng(seed)
+    boot = np.empty(n_bootstrap)
+    for t in range(n_bootstrap):
+        idx = rng.integers(0, n, size=n)
+        boot[t] = audio[idx].mean() - text[idx].mean()
+    lo, hi = np.quantile(boot, [alpha / 2, 1 - alpha / 2])
+    return {
+        "rd": rd,
+        "rd_pp": 100.0 * rd,
+        "ci_low": float(lo),
+        "ci_high": float(hi),
+        "ci_low_pp": 100.0 * float(lo),
+        "ci_high_pp": 100.0 * float(hi),
+        "n_items": int(n),
+        "audio_rate": float(audio.mean()),
+        "text_rate": float(text.mean()),
+    }
+
+
+def cohens_kappa(labels_a: Sequence[object], labels_b: Sequence[object]) -> float:
+    """Cohen's kappa for two raters over categorical labels (judge agreement)."""
+    a = list(labels_a)
+    b = list(labels_b)
+    if len(a) != len(b):
+        raise ValueError("rater label lists must be equal length")
+    n = len(a)
+    if n == 0:
+        raise ValueError("need at least one item for kappa")
+    categories = sorted({*a, *b}, key=str)
+    index = {c: i for i, c in enumerate(categories)}
+    k = len(categories)
+    conf = np.zeros((k, k))
+    for x, y in zip(a, b, strict=True):
+        conf[index[x], index[y]] += 1
+    po = float(np.trace(conf)) / n
+    row = conf.sum(axis=1) / n
+    col = conf.sum(axis=0) / n
+    pe = float(row @ col)
+    if pe >= 1.0:
+        return 1.0
+    return (po - pe) / (1.0 - pe)
