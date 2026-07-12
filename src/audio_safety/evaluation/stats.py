@@ -221,8 +221,13 @@ def paired_risk_difference_ci(
     }
 
 
-def cohens_kappa(labels_a: Sequence[object], labels_b: Sequence[object]) -> float:
-    """Cohen's kappa for two raters over categorical labels (judge agreement)."""
+def cohens_kappa(labels_a: Sequence[object], labels_b: Sequence[object]) -> float | None:
+    """Cohen's kappa for two raters over categorical labels (judge agreement).
+
+    Returns None when chance agreement ``pe`` is 1 (both raters constant on the
+    same category): kappa is undefined there, so callers should fall back to the
+    raw agreement rate rather than read a spurious 1.0.
+    """
     a = list(labels_a)
     b = list(labels_b)
     if len(a) != len(b):
@@ -241,5 +246,5 @@ def cohens_kappa(labels_a: Sequence[object], labels_b: Sequence[object]) -> floa
     col = conf.sum(axis=0) / n
     pe = float(row @ col)
     if pe >= 1.0:
-        return 1.0
+        return None
     return (po - pe) / (1.0 - pe)

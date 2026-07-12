@@ -62,6 +62,12 @@ def _render_markdown(report: dict, run_name: str) -> str:
         lines += [f"## {scope}", "", f"**Decision: {dec['status']}** — {dec['note']}", ""]
         for reason in dec["reasons"]:
             lines.append(f"- {reason}")
+        for model, did in block.get("specificity_did", {}).items():
+            if not did.get("insufficient"):
+                lines.append(
+                    f"- specificity DiD [{model}] (harmful−benign, n={did['n']}): "
+                    f"{did['did_pp']:.1f}pp (CI {did['ci_low_pp']:.1f}..{did['ci_high_pp']:.1f})"
+                )
         agr = block.get("judge_agreement", {})
         if agr.get("kappa") is not None:
             lines.append(f"- judge agreement (kappa, n={agr['n']}): {agr['kappa']:.3f}")
@@ -95,6 +101,12 @@ def main() -> None:
     report = {
         "run_name": run_name,
         "n_judged_rows": len(judged),
+        "scope_note": (
+            "all_items = every transcript-control-passed item (<=150), NOT a literal "
+            "150. Reporting heldout_only consumes the heldout 40% for the direction "
+            "call, so a Stage B/C confirmatory claim then requires a FRESH cohort "
+            "(design §7.4)."
+        ),
         "all_items": _t0_from(judged, cfg),
         "heldout_only": _t0_from(heldout_rows, cfg) if heldout_rows else None,
     }
