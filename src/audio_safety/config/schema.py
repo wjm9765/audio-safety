@@ -188,6 +188,14 @@ class AudioRdoDatasetConfig(StrictModel):
         min_length=2,
     )
     transcript_control: TranscriptControlConfig = Field(default_factory=TranscriptControlConfig)
+    # Run 4 §8: extra per-(item,label,style) text overrides produced offline by
+    # scripts/prepare_attack_variants.py (frozen jailbreak wrappers). Same schema
+    # as the style-variant file; merged on top of it during rendering. None = off.
+    attack_variant_file: Path | None = None
+    # Styles that must be rendered with NEUTRAL acoustics even though their text is
+    # transformed (the jailbreak family delivers the attack through wording, not
+    # prosody). The renderer forces the neutral CosyVoice2 instruction for these.
+    neutral_acoustic_styles: list[str] = Field(default_factory=list)
 
 
 class HiddenSiteConfig(StrictModel):
@@ -404,6 +412,48 @@ class ConversionProbeConfig(StrictModel):
     readout_min_auroc: float = 0.65
 
 
+class AttackFamilyConfig(StrictModel):
+    """One attack family = a set of ``style`` conditions vs the clean style.
+
+    ``attack_styles`` are the transformed conditions (e.g. jailbreak wrappers
+    ``jb_ica``/``jb_pap``, or emotion rewrites ``sad``/``angry``); the flip is
+    measured against ``AttackFlipConfig.clean_style`` on the SAME base item.
+    """
+
+    name: str
+    attack_styles: list[str] = Field(min_length=1)
+
+
+class AttackFlipConfig(StrictModel):
+    """Run 4 §8 attack-induced-flip analysis (direction-finding, not a §0 gate).
+
+    Reads the judged manifest and reports, per family and per judge: the within-
+    modality flip rate (genuine refusal -> comply), the benign difference-in-
+    differences specificity, and the audio-vs-text interaction. Flexible analysis
+    per design §8.7 — there is no hard PROCEED/STOP threshold here.
+    """
+
+    enabled: bool = False
+    clean_style: str = "neutral"
+    families: list[AttackFamilyConfig] = Field(
+        default_factory=lambda: [
+            AttackFamilyConfig(name="jailbreak", attack_styles=["jb_ica", "jb_pap"]),
+        ],
+        min_length=1,
+    )
+    # None reuses the Stage-A judge (conversion_gap.judge.models) so there is one
+    # judged manifest and one judge configuration for the whole §8 run.
+    judge_models: list[str] | None = None
+    # Within-modality flip + benign DiD are computed on primary_modality; the
+    # audio-vs-text interaction pairs primary_modality against text_modality.
+    primary_modality: str = "audio"
+    text_modality: str = "text"
+    n_bootstrap: int = 2000
+    ci_alpha: float = 0.05
+    report_file: Path = Path("attack_flip_report.json")
+    report_markdown_file: Path = Path("attack_flip_report.md")
+
+
 class ExperimentConfig(StrictModel):
     name: str
     seed: int = 0
@@ -422,6 +472,9 @@ class ExperimentConfig(StrictModel):
 
     # Run 4 Stage B (representation-level mechanism adjudication). Optional/off.
     conversion_probe: ConversionProbeConfig | None = None
+
+    # Run 4 §8 attack-induced-flip analysis. Optional/off by default.
+    attack_flip: AttackFlipConfig | None = None
 
     # Legacy cone-drift fields remain optional so old analysis helpers can still be
     # imported while exp1 moves to the Audio-RDO gate.

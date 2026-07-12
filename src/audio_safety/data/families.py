@@ -1,5 +1,6 @@
 """Audio rendering manifests and transcript-control records for Audio-RDO."""
 
+import hashlib
 import json
 import os
 import shlex
@@ -190,22 +191,32 @@ def _record_bool(value: object) -> bool:
     return bool(value)
 
 
-def _load_style_text_overrides(
-    data_dir: Path,
-    dataset_cfg: AudioRdoDatasetConfig,
-) -> dict[tuple[str, str, str], str]:
-    """Load reviewed/generated style rewrites for TTS, if present.
+# CosyVoice2 neutral-acoustic instruction (mirrors scripts/cosyvoice2_tts.py). The
+# renderer forces this for neutral_acoustic_styles so jailbreak wrappers are spoken
+# in a plain voice — the attack is in the wording, not the prosody.
+NEUTRAL_STYLE_INSTRUCTION = "Speak in a neutral, clear voice.<|endofprompt|>"
 
-    Missing or unusable rows fall back to the base pair text. Rows that
-    self-report added operational detail or refusal/warning content are skipped.
+
+def _parse_variant_override_file(
+    path: Path,
+    *,
+    verify_hash: bool = False,
+    strict_unique: bool = False,
+) -> dict[tuple[str, str, str], str]:
+    """Parse one (item,label,style)->styled_text override file.
+
+    Shared by the style-variant (emotion) and attack-variant (jailbreak) files;
+    both use the same record schema. Rows that self-report added operational
+    detail, refusal/warning content, or low content preservation are skipped, as
+    are empty rewrites.
+
+    For the frozen attack file, ``verify_hash`` enforces that ``styled_text`` still
+    hashes to the recorded ``rendered_sha256`` (so an edited wrapper cannot be
+    rendered under a stale hash), and ``strict_unique`` rejects duplicate
+    (item,label,style) keys (which would otherwise silently keep the last row).
     """
-    cfg = dataset_cfg.style_variant_generation
-    if not cfg.enabled:
-        return {}
-    path = data_dir / cfg.output_file
     if not path.exists():
         return {}
-
     overrides: dict[tuple[str, str, str], str] = {}
     for record in load_jsonl(path):
         if _record_bool(record.get("added_operational_detail")):
@@ -214,7 +225,8 @@ def _load_style_text_overrides(
             continue
         if str(record.get("content_preservation", "")).strip().lower() == "low":
             continue
-        styled_text = str(record.get("styled_text") or "").strip()
+        raw_styled = record.get("styled_text")
+        styled_text = str(raw_styled or "").strip()
         if not styled_text:
             continue
         key = (
@@ -222,8 +234,56 @@ def _load_style_text_overrides(
             str(record.get("safety_label")),
             str(record.get("target_style") or record.get("style")),
         )
+        if verify_hash:
+            # Every frozen attack row must carry a hash, and it must hash the exact
+            # text that is actually used/spoken (the stripped styled_text), so a
+            # padded row cannot pass with a hash of its raw (unstripped) form.
+            expected = record.get("rendered_sha256")
+            if expected is None:
+                raise ValueError(
+                    f"attack-variant row {key} in {path} has no rendered_sha256. "
+                    "Re-run prepare_attack_variants.py to (re)freeze the file."
+                )
+            actual = hashlib.sha256(styled_text.encode("utf-8")).hexdigest()
+            if actual != expected:
+                raise ValueError(
+                    f"attack-variant hash mismatch for {key} in {path}: "
+                    f"spoken text hashes to {actual} but rendered_sha256={expected}. "
+                    "Re-run prepare_attack_variants.py instead of editing the file."
+                )
+        if strict_unique and key in overrides:
+            raise ValueError(f"duplicate attack-variant override for {key} in {path}")
         overrides[key] = styled_text
     return overrides
+
+
+def _load_style_text_overrides(
+    data_dir: Path,
+    dataset_cfg: AudioRdoDatasetConfig,
+) -> tuple[dict[tuple[str, str, str], str], set[tuple[str, str, str]]]:
+    """Load reviewed/generated style rewrites for TTS, if present.
+
+    Returns ``(merged_overrides, attack_keys)``. ``merged_overrides`` merges the
+    emotion style-variant file with the optional attack-variant file (frozen
+    jailbreak wrappers). ``attack_keys`` are exactly the keys sourced from the
+    hash-verified, de-duplicated attack file, so the caller can require that a
+    text-attack style is satisfied by the ATTACK file specifically (an emotion row
+    keyed with an attack style must never masquerade as a verified attack).
+    """
+    overrides: dict[tuple[str, str, str], str] = {}
+    cfg = dataset_cfg.style_variant_generation
+    if cfg.enabled:
+        overrides.update(_parse_variant_override_file(data_dir / cfg.output_file))
+    attack_keys: set[tuple[str, str, str]] = set()
+    if dataset_cfg.attack_variant_file is not None:
+        attack_overrides = _parse_variant_override_file(
+            data_dir / dataset_cfg.attack_variant_file,
+            verify_hash=True,
+            strict_unique=True,
+        )
+        attack_keys = set(attack_overrides)
+        overrides.update(attack_overrides)
+    return overrides, attack_keys
 
 
 def render_audio_records(
@@ -243,7 +303,13 @@ def render_audio_records(
     audio_root = data_dir / tts_cfg.audio_subdir
     records: list[dict[str, object]] = []
     pending_jobs: list[dict[str, object]] = []
-    style_text_overrides = _load_style_text_overrides(data_dir, dataset_cfg)
+    style_text_overrides, attack_override_keys = _load_style_text_overrides(data_dir, dataset_cfg)
+    # Text-only attack styles (jailbreak) carry the attack purely in wording, so a
+    # missing wrapper must FAIL, not silently fall back to the clean base text
+    # (which would label clean audio as an attacked cell). The override must come
+    # from the hash-verified attack file, not an emotion row keyed with this style.
+    # Emotion styles may fall back to base text (acoustic-only) and are not here.
+    require_override_styles = set(dataset_cfg.neutral_acoustic_styles)
 
     if not dry_run and not (tts_cfg.batch_command_template or tts_cfg.command_template):
         raise ValueError(
@@ -258,6 +324,14 @@ def render_audio_records(
         ):
             for style in dataset_cfg.styles:
                 style_key = (pair.item_id, safety_label, style)
+                if style in require_override_styles and style_key not in attack_override_keys:
+                    raise ValueError(
+                        f"style {style!r} is a text-attack style (dataset."
+                        f"neutral_acoustic_styles) but has no hash-verified wrapped "
+                        f"text in the attack file for item {pair.item_id!r} "
+                        f"({safety_label}). Run ./scripts/prepare_attack_variants.py "
+                        "and set dataset.attack_variant_file before rendering."
+                    )
                 render_text = style_text_overrides.get(style_key, text)
                 style_text_source = (
                     "openrouter_style_variant" if render_text != text else "base_pair_text"
@@ -280,13 +354,38 @@ def render_audio_records(
                     "query_type": safety_label,
                     "overwrite": "true" if tts_cfg.overwrite else "false",
                 }
+                # Force neutral acoustics for text-only attack conditions (e.g.
+                # jailbreak wrappers): the batch renderer reads style_instruction.
+                if style in dataset_cfg.neutral_acoustic_styles:
+                    values["style_instruction"] = NEUTRAL_STYLE_INSTRUCTION
                 command = (
                     _format_command(tts_cfg.command_template, values)
                     if tts_cfg.command_template
                     else None
                 )
+                # Hash the exact spoken text; a sidecar records what each wav was
+                # rendered from so a reused file whose text later changed is caught
+                # instead of silently mislabeled (freeze integrity).
+                reference_sha256 = hashlib.sha256(render_text.encode("utf-8")).hexdigest()
+                hash_path = output.with_name(output.name + ".sha256")
                 output.parent.mkdir(parents=True, exist_ok=True)
                 if output.exists() and not tts_cfg.overwrite:
+                    prior = hash_path.read_text().strip() if hash_path.exists() else None
+                    if prior is None and style in require_override_styles:
+                        # Attack audio must be provenance-tracked; an existing wav
+                        # with no sidecar could be leftover clean/other-text audio.
+                        raise ValueError(
+                            f"attack-style render {output} exists without a "
+                            f"{hash_path.name} provenance sidecar. Delete it or set "
+                            "tts.overwrite=true to re-render."
+                        )
+                    if prior is not None and prior != reference_sha256:
+                        raise ValueError(
+                            f"stale render at {output}: existing audio was rendered "
+                            f"from text hashing to {prior}, but the current manifest "
+                            f"text hashes to {reference_sha256}. Set tts.overwrite=true "
+                            f"or delete {output.name} / {hash_path.name}."
+                        )
                     status = "exists"
                 elif dry_run:
                     status = "planned"
@@ -296,7 +395,13 @@ def render_audio_records(
                 else:
                     if command is None:
                         raise ValueError("dataset.tts.command_template is required")
+                    # Delete any stale file first so overwrite is guaranteed even if
+                    # the configured command would skip an existing path; only then
+                    # is the sidecar an honest record of what was just rendered.
+                    if tts_cfg.overwrite and output.exists():
+                        output.unlink()
                     subprocess.run(command, check=True, timeout=None)
+                    hash_path.write_text(reference_sha256)
                     status = "rendered"
 
                 records.append(
@@ -307,6 +412,11 @@ def render_audio_records(
                         "style": style,
                         "path": str(output.relative_to(data_dir)),
                         "reference_text": render_text,
+                        # Hash of the exact spoken text (auditable against the frozen
+                        # attack file; also flags a reused/stale wav whose manifest
+                        # text later changed). Persisted next to the wav as a sidecar.
+                        "reference_sha256": reference_sha256,
+                        "hash_path": str(hash_path.relative_to(data_dir)),
                         "base_reference_text": text if render_text != text else None,
                         "style_text_source": style_text_source,
                         "transcript": None,
@@ -336,6 +446,10 @@ def render_audio_records(
         for record in records:
             if record["status"] == "queued":
                 record["status"] = "rendered"
+                # Persist the render-text hash sidecar so a later reuse of this wav
+                # is checked against the text it was actually rendered from.
+                sidecar = data_dir / str(record["hash_path"])
+                sidecar.write_text(str(record["reference_sha256"]))
 
     save_jsonl(records, data_dir / tts_cfg.manifest_file)
     return records

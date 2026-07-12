@@ -1,3 +1,10 @@
+from audio_safety.data.attacks import (
+    JailbreakTemplate,
+    build_attack_variant_records,
+    freeze_summary,
+    load_jailbreak_templates,
+    wrap_request,
+)
 from audio_safety.data.datasets import (
     AudioRdoPair,
     AudioRdoSplit,
@@ -28,9 +35,14 @@ from audio_safety.data.openrouter_pairs import (
 __all__ = [
     "AudioRdoPair",
     "AudioRdoSplit",
+    "JailbreakTemplate",
     "RenderedAudio",
     "TextItem",
+    "build_attack_variant_records",
     "expected_audio_path",
+    "freeze_summary",
+    "load_jailbreak_templates",
+    "wrap_request",
     "generate_benign_pair",
     "generate_pair_manifest",
     "generate_style_variant",

@@ -1,3 +1,10 @@
+from audio_safety.evaluation.attack_flip import (
+    audio_specificity,
+    benign_did,
+    classify,
+    compute_attack_flip,
+    flip_stats,
+)
 from audio_safety.evaluation.conversion_gap import (
     compute_t0,
     paired_attack_gap_for_judge,
@@ -42,6 +49,11 @@ __all__ = [
     "AudioRdoGateMetrics",
     "adjudicate_conversion",
     "attack_success_from_verdict",
+    "audio_specificity",
+    "benign_did",
+    "classify",
+    "compute_attack_flip",
+    "flip_stats",
     "behavior_label_from_verdict",
     "block_writer_gap",
     "bootstrap_cosine_ci",

@@ -246,9 +246,16 @@ def synthesize_to_file(
     output: Path,
 ) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
-    instruction = style_instruction or STYLE_INSTRUCTIONS.get(
-        style, f"Speak in a {style} style.<|endofprompt|>"
-    )
+    if style_instruction:
+        instruction = style_instruction
+    elif style in STYLE_INSTRUCTIONS:
+        instruction = STYLE_INSTRUCTIONS[style]
+    elif style.startswith("jb_"):
+        # Text-jailbreak attack conditions carry the attack in wording, not
+        # prosody, so they are spoken in the neutral voice by default.
+        instruction = STYLE_INSTRUCTIONS["neutral"]
+    else:
+        instruction = f"Speak in a {style} style.<|endofprompt|>"
     chunks = []
     for chunk in model.inference_instruct2(text, instruction, str(prompt_audio), stream=False):
         chunks.append(chunk["tts_speech"])

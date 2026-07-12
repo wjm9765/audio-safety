@@ -1,0 +1,65 @@
+# Run 4 §8: attack-induced-flip direction-finding.
+# Pre-registered direction: docs/experiments/exp1_refusal_cone_drift/run4_conversion_gap_design.md §8
+#
+# The `style` axis is the attack transform: neutral = clean A(H)/A(B),
+# jb_ica/jb_pap = frozen text-jailbreak wrappers (neutral acoustics). The
+# conversion_gap block is reused to produce the text leg + run the single blinded
+# Gemini judge; attack_flip owns the flip analysis. This is fast direction-finding,
+# NOT the pre-registered §0 gate.
+name: run4_attack_flip
+
+seed: 0
+
+model: configs/models/qwen2_audio.yaml
+paths: configs/paths/default.yaml
+dataset: configs/datasets/audio_rdo_attack_flip.yaml
+
+# Reused to (a) generate the matched text leg X(H)/X(T(H)) via the same backbone
+# and (b) run one blinded judge over every arm into a single judged manifest.
+conversion_gap:
+  enabled: true
+
+  text_arm:
+    max_new_tokens: 64
+    transcribe_max_new_tokens: 128
+    faithful_wer_max: 0.20
+    # Isolate this run's judged/text manifests from the neutral conversion-gap run.
+    text_outputs_file: manifests/audio_rdo_attack_flip_text_outputs.jsonl
+    transcript_outputs_file: manifests/audio_rdo_attack_flip_transcript_outputs.jsonl
+
+  judge:
+    # §8 direction-finding fast path: one blinded, cheap lower-version Gemini flash
+    # judge. A multi-judge / human audit is deferred to a paper-facing run.
+    models:
+      - google/gemini-2.0-flash-001
+    temperature: 0.0
+    batch_size: 8
+    max_concurrency: 4
+    blind_to_modality: true
+    blind_to_safety_label: true
+    outputs_file: manifests/audio_rdo_attack_flip_judged.jsonl
+
+  # T0 block is unused by the flip analysis but kept schema-valid; single judge.
+  t0:
+    primary_style: neutral
+    require_both_judges: false
+
+# §8 attack-induced-flip analysis (design §8.3-8.4). Descriptive, no hard gate.
+attack_flip:
+  enabled: true
+  clean_style: neutral
+  primary_modality: audio
+  # judge_models: null -> reuse conversion_gap.judge.models (one judged manifest).
+  families:
+    - name: jailbreak
+      attack_styles:
+        - jb_ica
+        - jb_pap
+    # Secondary emotion family (design §8.2): also add sad/angry to
+    # dataset.styles and generate the affective rewrites first.
+    # - name: emotion
+    #   attack_styles:
+    #     - sad
+    #     - angry
+  n_bootstrap: 2000
+  ci_alpha: 0.05
