@@ -18,6 +18,27 @@ style what moves harmful audio off that axis? Answers below.
   2026-07-12 audit below found direct novelty collisions. `r_A` is now an
   instrument for a narrower writer-bottleneck test, not the paper headline, and
   the locked Run 4 design needs a dated amendment before execution.
+- **Run 4 code implemented (2026-07-12, not yet run).** Both Run 4 stages are
+  coded, tested (`uv run pytest`), and cross-checked with Codex gpt-5.6-sol
+  (`outputs/cross_checks/20260712_direction_check_conversion_gap.md`), per the
+  amended design [run4_conversion_gap_design.md](./run4_conversion_gap_design.md)
+  §7:
+  - **Stage A / T0** (behavioral audio-vs-text gap; design §7.1–7.4):
+    `scripts/generate_text_behavior.py` (text + own-transcript arms) →
+    `scripts/judge_behavior.py` (two blinded, micro-batched OpenRouter judges) →
+    `scripts/analyze_t0.py`. Modules: `evaluation/judge.py`,
+    `evaluation/conversion_gap.py`, paired-binary stats in `evaluation/stats.py`.
+  - **Stage B / mechanism adjudication** (representation-level; design §7.5):
+    `scripts/extract_conversion_activations.py` →
+    `scripts/analyze_conversion.py`. Modules: `pipelines/conversion_probe.py`
+    (capture), `evaluation/conversion_probe.py` (cross-fit r_H, specificity null,
+    block-writer, CONVERSION/PERCEPTION/DRIFT/READOUT/MIXED/UNRESOLVED call).
+  - Config: `configs/experiments/run4_conversion_gap.yaml`
+    (`conversion_gap` + `conversion_probe` blocks). `.env` is loaded via
+    python-dotenv in the config loader (no manual OPENROUTER_API_KEY export).
+  - **User scoping (2026-07-12):** the behavioral audio>text gap is treated as
+    literature-established (AIAH/JALMBench), so Stage B runs directly (Stage A in
+    parallel); this is fast direction-finding, not the paper-final run.
 - **Latest run:** `exp1_20260707_1557_allpos_rebuttal_l12nbhd` (all-position
   operator). Full detail in the run section below and in [results.md](./results.md).
 - **Key finding (the anchor): a manipulable audio-conditioned refusal axis

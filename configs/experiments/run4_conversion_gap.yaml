@@ -44,3 +44,20 @@ conversion_gap:
     require_both_judges: true
     n_bootstrap: 2000
     ci_alpha: 0.05
+
+# Run 4 Stage B: representation-level mechanism adjudication (design §7.5).
+# Fast direction-finding; NOT the pre-registered §0 gate.
+conversion_probe:
+  enabled: true
+  # Set the frozen r_A artifact (Run 3 rdo_axis.npz) here or via --axis-artifact.
+  frozen_axis_artifact: null
+  c_r_position: first_generation_prelogit   # P2 (decision) for c_R via r_A
+  c_h_position: assistant_start_pre         # P1 (content) for cross-fit r_H
+  c_r_layer: 16
+  c_h_layers: [8, 12, 16]
+  n_cross_fit_folds: 5
+  n_random_directions: 999
+  harmfulness_preserved_max_sd: 0.3
+  refusal_underdriven_min_sd: 0.3
+  specificity_min_ratio: 2.0
+  readout_min_auroc: 0.65

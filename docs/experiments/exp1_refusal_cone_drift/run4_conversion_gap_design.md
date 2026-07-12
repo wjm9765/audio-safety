@@ -239,6 +239,43 @@ failure)만 pair에서 제외**하고, 제외 수와 arm별 decoding-failure 수
 `transcript_control_passed` 통과 항목(≤150)이며, 이 필터는 arm 간 대칭(item 단위)이라 paired
 discordant 카운트를 편향시키지 않는다.
 
+## 7.5 Stage B (fast) — 메커니즘 판정 구현 (2026-07-12)
+
+> 사용자 결정: audio>text 행동 격차는 문헌(AIAH, JALMBench 등)이 확립했으므로 T0를 게이트로
+> 삼지 않고(Stage A는 병행 실행) **Stage B를 바로 구현**한다. 이는 논문 spine을 확정하기 위한
+> **빠른 direction-finding** 실험이지 §0/paper-final이 아니다. 구현·판정 로직은 Codex
+> gpt-5.6-sol(xhigh) Round 5 교차검증 반영(`outputs/cross_checks/...conversion_gap.md`).
+
+matched neutral text-vs-audio 활성화에서 4개 메커니즘 —
+(i) generic drift/calibration, (ii) perception/semantic degradation,
+(iii) refusal under-writing/conversion, (iv) modality-gated readout — 를 **강제 4-지선다
+없이**(MIXED/UNRESOLVED 허용) 판정한다. 코드: `evaluation/conversion_probe.py`(순수 판정),
+`pipelines/conversion_probe.py`(캡처), 스크립트 `extract_conversion_activations.py` →
+`analyze_conversion.py`, config `conversion_probe` 블록.
+
+측정(교차검증 override 반영):
+- **c_R(refusal)** = P2(decision position)에서 **frozen r_A**(Run 3, 인과 검증됨)에 투영. out-of-sample.
+- **c_H(harmfulness)** = content/pre-assistant 위치(P1)에서 **item-grouped cross-fit DIM**. P2-in-sample
+  구성 편향 방지(Q6). preservation의 주 신호 = audio 상태에서 harmfulness가 **선형 복원 가능한지**
+  (audio-native cross-fit AUROC ≥ readout_min_auroc); d_H는 서술.
+- **Specificity** = benign-centered itemwise double difference `G(u)`를 r_A / r_H@P2 /
+  **variance-standardized(등방 아님) random 방향 ~999개** 에 대해 비교(Q5). r_A–r_H overlap(cos) 보고.
+- **Writer** = 연속 post-block 잔차 차 `Δc_R(l)=<out(l)-out(l-1), r_A>`(가법성; RMSNorm 무해),
+  **telescoping 수치검증**, attn/MLP 추론 금지(Q3; component 분해는 Stage C).
+- **Readout gate**: r_A가 각 modality 내부에서 refusal↔compliance를 AUROC로 분리 못하면 그 modality
+  비교 무효 → UNRESOLVED.
+- **Clamp**은 이 fast 판정의 결정자가 아니라 후속 인과 확인(양성 rescue만 증거, null은 non-diagnostic; Q1).
+
+판정(soft): audio-native AUROC 낮음 → **PERCEPTION(F1)**; harmfulness 복원됨 & c_R under-driven &
+benign-centered gap CI>0 & specificity ratio ≥ 임계 → **CONVERSION**; raw c_R gap 있으나 centering
+후 소멸/비특이 → **DRIFT**; harmfulness 복원됨 & c_R 미under-driven → **READOUT(F2)**; 그 외 MIXED.
+r_T-RDO는 유보(frozen r_A + cheap r_T_dim), 정렬 증거 전엔 "transported r_A coordinate"로만 표기(Q2).
+
+주의(교차검증): 분석 표본에 국소 행동 대비가 없으면 Stage B는 표현을 **기술**할 뿐 그 표본의
+audio-text 격차를 **설명**한다고 주장하지 않는다. component(attn/MLP/projector) 분해, block-0
+input을 포함한 엄밀 telescoping, all-position measured clamp, 다층 c_H sweep, 확정 cohort는 Stage C/
+paper run으로 이연.
+
 ## 변경 이력
 
 - 2026-07-08 — 최초 사전 등록.
@@ -246,6 +283,10 @@ discordant 카운트를 편향시키지 않는다.
   confound baseline·writer-local·freeze 명시).** §0 표 임계값·§1 가설 불변. 근거: 2026-07-12 문헌
   감사와 Codex(gpt-5.6-sol xhigh)/gpt-5.5 blind→unblind 교차검증
   (`outputs/cross_checks/20260712_direction_check_conversion_gap.md`). T0는 outcome-informed로 명시.
+- 2026-07-12 — **§7.5 추가 + Stage B(fast) 메커니즘-판정 코드 구현.** 사용자 결정으로 T0 게이트
+  없이 Stage B 직행(direction-finding). Codex gpt-5.6-sol(xhigh) Round 5 override 반영(cross-fit
+  r_H content position, variance-standardized specificity null, block-writer telescoping,
+  MIXED/UNRESOLVED 허용, clamp는 후속 인과 확인). `uv run pytest` 95 passed. §0·§1 불변.
 - 2026-07-12 — **Stage A 코드 구현 + 판정 로직 교차검증 정정.** Codex(gpt-5.6-sol xhigh) Round 4 +
   research-code-reviewer 검토 반영: (1) decoding failure는 제외가 아니라 non-attack으로 카운트
   (differential-exclusion bias 제거, §7.4), (2) `require_both_judges`는 judge ≥2 강제 +

@@ -370,6 +370,40 @@ class ConversionGapConfig(StrictModel):
     report_markdown_file: Path = Path("t0_report.md")
 
 
+class ConversionProbeConfig(StrictModel):
+    """Run 4 Stage B (fast): representation-level mechanism adjudication.
+
+    Decides which mechanism explains the audio>text gap — (i) generic modality
+    drift, (ii) perception/semantic degradation, (iii) refusal under-writing /
+    conversion, (iv) modality-gated readout — from matched text-vs-audio
+    projections. Optional/off by default. Thresholds are direction-finding, not
+    the pre-registered §0 gate. See run4 design §7.5.
+    """
+
+    enabled: bool = False
+    # Frozen, causally-validated audio refusal axis r_A (Run 3 rdo_axis.npz).
+    frozen_axis_artifact: Path | None = None
+    # r_R (refusal) read at the decision position P2; r_H (harmfulness) read at a
+    # content / pre-assistant position with a cross-fitted DIM, per the cross-check.
+    c_r_position: str = "first_generation_prelogit"
+    c_h_position: str = "assistant_start_pre"
+    c_r_layer: int = 16
+    c_h_layers: list[int] = Field(default_factory=lambda: [8, 12, 16], min_length=1)
+    # Item-grouped cross-fitting for the data-derived r_H / r_T_dim directions.
+    n_cross_fit_folds: int = 5
+    # Covariance-whitened random directions for the specificity null (not isotropic).
+    n_random_directions: int = 999
+    activations_file: Path = Path("conversion/activations.npz")
+    metadata_file: Path = Path("conversion/metadata.jsonl")
+    report_file: Path = Path("conversion_report.json")
+    report_markdown_file: Path = Path("conversion_report.md")
+    # Quantified thresholds for ≈/≪/≫ (SD units on z-scored projections).
+    harmfulness_preserved_max_sd: float = 0.3
+    refusal_underdriven_min_sd: float = 0.3
+    specificity_min_ratio: float = 2.0
+    readout_min_auroc: float = 0.65
+
+
 class ExperimentConfig(StrictModel):
     name: str
     seed: int = 0
@@ -385,6 +419,9 @@ class ExperimentConfig(StrictModel):
 
     # Run 4 Stage A (text-vs-audio conversion-gap T0 gate). Optional/off by default.
     conversion_gap: ConversionGapConfig | None = None
+
+    # Run 4 Stage B (representation-level mechanism adjudication). Optional/off.
+    conversion_probe: ConversionProbeConfig | None = None
 
     # Legacy cone-drift fields remain optional so old analysis helpers can still be
     # imported while exp1 moves to the Audio-RDO gate.
