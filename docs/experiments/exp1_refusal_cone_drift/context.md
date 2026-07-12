@@ -15,6 +15,9 @@ active next design is the Run 4 conversion/writer test audited below.
 > +0.4pp("가장 작은 modality gap")과 정합. 새 operative 방향 = **거부가 공격 때문에 응락으로 뒤집히는
 > 순간(flip)을 다차원 분석(행동 + r_A/r_H 표현) + 방법론 제시**. 공격군 = text-jailbreak→speech(primary)
 > + StyleBreak식 감정(angry/sad 말투변형 + CosyVoice2 감정렌더, secondary); acoustic/AdvWave 연기.
+> direction-finding fast path에서는 **음질 게이트(`score_transcripts.py` ASR/WER)를 스킵**하고,
+> 행동 판정은 OpenRouter **`google/gemini-3.5-flash` 1개**로 실행한다
+> (`require_both_judges: false`). 다중 judge/human audit과 ASR/WER 통제는 paper-facing 단계로 이연한다.
 > matched-null은 boundary evidence로 보존. 근거: Codex gpt-5.6-sol(xhigh) 3라운드 재논의 + 문헌·코드
 > 감사. 아래 §7 이하의 conversion-gap 서술은 이 전환 이전의 히스토리로 보존한다.
 
