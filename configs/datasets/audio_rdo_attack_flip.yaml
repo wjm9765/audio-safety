@@ -52,6 +52,7 @@ tts:
   engine: cosyvoice2
   command_template: "./scripts/cosyvoice2_tts.py --text-json {text_json} --style {style} --output {output_path}"
   batch_command_template: "./scripts/cosyvoice2_tts.py --batch-jsonl {batch_jsonl}"
+  batch_jobs_file: manifests/audio_rdo_attack_flip_tts_jobs.jsonl
   batch_workers: 2
   batch_worker_cuda_devices:
     - "0"

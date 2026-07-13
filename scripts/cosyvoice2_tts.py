@@ -11,6 +11,7 @@ renders should use --batch-jsonl so the CosyVoice model is loaded once per batch
 
 import argparse
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -218,6 +219,10 @@ def job_overwrite(job: dict[str, Any], args: argparse.Namespace) -> bool:
     return bool(value)
 
 
+def _passthrough_progress(iterable, *unused_args, **unused_kwargs):
+    return iterable
+
+
 def prepare_renderer(args: argparse.Namespace):
     _root, repo_dir, _venv_dir, model_dir = paths(args)
     ensure_model(model_dir, args.model_id)
@@ -225,12 +230,22 @@ def prepare_renderer(args: argparse.Namespace):
     sys.path.insert(0, str(repo_dir))
     sys.path.append(str(repo_dir / "third_party" / "Matcha-TTS"))
 
+    import cosyvoice.cli.cosyvoice as cosyvoice_cli
     import torch
     import torchaudio
-    from cosyvoice.cli.cosyvoice import AutoModel
+
+    if args.batch_jsonl is not None:
+        # CosyVoice wraps the normalized segments of every individual utterance in
+        # its own tqdm. Most jobs contain one segment, which produces a misleading
+        # stream of 0/1 -> 1/1 bars. The wrapper owns the useful shard-level bar in
+        # batch mode, so suppress only that nested display and its per-utterance INFO
+        # logging. Single-file debugging keeps the upstream output unchanged.
+        cosyvoice_cli.tqdm = _passthrough_progress
+        cosyvoice_cli.logging.getLogger().setLevel(cosyvoice_cli.logging.WARNING)
+        logging.getLogger().setLevel(logging.WARNING)
 
     prompt_audio = args.prompt_audio or repo_dir / "asset" / "zero_shot_prompt.wav"
-    model = AutoModel(model_dir=str(model_dir))
+    model = cosyvoice_cli.AutoModel(model_dir=str(model_dir))
     return torch, torchaudio, model, prompt_audio
 
 
@@ -244,6 +259,7 @@ def synthesize_to_file(
     style_instruction: str | None,
     prompt_audio: Path,
     output: Path,
+    announce: bool = True,
 ) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     if style_instruction:
@@ -263,7 +279,32 @@ def synthesize_to_file(
         raise RuntimeError("CosyVoice2 produced no audio chunks")
     speech = torch.cat(chunks, dim=-1).detach().cpu()
     torchaudio.save(str(output), speech, model.sample_rate)
-    print(f"[cosyvoice2] wrote {output}", flush=True)
+    if announce:
+        print(f"[cosyvoice2] wrote {output}", flush=True)
+
+
+def batch_worker_context() -> tuple[int, int]:
+    """Return the zero-based worker index and total worker count from the parent."""
+    worker_index = int(os.environ.get("AUDIO_SAFETY_TTS_WORKER_INDEX", "0"))
+    num_workers = int(os.environ.get("AUDIO_SAFETY_TTS_NUM_WORKERS", "1"))
+    if num_workers < 1:
+        raise ValueError("AUDIO_SAFETY_TTS_NUM_WORKERS must be >= 1")
+    if not 0 <= worker_index < num_workers:
+        raise ValueError(
+            "AUDIO_SAFETY_TTS_WORKER_INDEX must be between 0 and "
+            f"{num_workers - 1}, got {worker_index}"
+        )
+    return worker_index, num_workers
+
+
+def batch_progress_description(
+    jobs: list[dict[str, Any]],
+    worker_index: int,
+    num_workers: int,
+) -> str:
+    styles = sorted({str(job.get("style") or "neutral") for job in jobs})
+    style_label = styles[0] if len(styles) == 1 else f"{len(styles)} styles"
+    return f"TTS worker {worker_index + 1}/{num_workers} {style_label}"
 
 
 def render(args: argparse.Namespace) -> None:
@@ -295,35 +336,50 @@ def render_batch(args: argparse.Namespace) -> None:
         print(f"[cosyvoice2] no batch jobs in {args.batch_jsonl}", flush=True)
         return
     torch, torchaudio, model, prompt_audio = prepare_renderer(args)
+    from tqdm.auto import tqdm
+
     total = len(jobs)
-    for index, job in enumerate(jobs, start=1):
-        output_value = job.get("output_path") or job.get("output")
-        if output_value is None:
-            raise ValueError(f"batch job is missing output_path/output: {job}")
-        output = Path(str(output_value))
-        style = str(job.get("style") or args.style)
-        style_instruction = job.get("style_instruction") or args.style_instruction
-        if style_instruction is not None:
-            style_instruction = str(style_instruction)
-        item_id = str(job.get("item_id") or job.get("query_id") or output.stem)
-        safety_label = str(job.get("safety_label") or job.get("query_type") or "unknown")
-        if output.exists() and not job_overwrite(job, args):
-            print(f"[cosyvoice2] batch {index}/{total} exists {output}", flush=True)
-            continue
-        print(
-            f"[cosyvoice2] batch {index}/{total} {item_id} {safety_label}/{style}",
-            flush=True,
-        )
-        synthesize_to_file(
-            torch=torch,
-            torchaudio=torchaudio,
-            model=model,
-            text=text_from_job(job),
-            style=style,
-            style_instruction=style_instruction,
-            prompt_audio=prompt_audio,
-            output=output,
-        )
+    worker_index, num_workers = batch_worker_context()
+    description = batch_progress_description(jobs, worker_index, num_workers)
+    progress = tqdm(
+        jobs,
+        total=total,
+        desc=description,
+        unit="wav",
+        position=worker_index,
+        leave=True,
+        dynamic_ncols=True,
+    )
+    try:
+        for job in progress:
+            output_value = job.get("output_path") or job.get("output")
+            if output_value is None:
+                raise ValueError(f"batch job is missing output_path/output: {job}")
+            output = Path(str(output_value))
+            style = str(job.get("style") or args.style)
+            style_instruction = job.get("style_instruction") or args.style_instruction
+            if style_instruction is not None:
+                style_instruction = str(style_instruction)
+            item_id = str(job.get("item_id") or job.get("query_id") or output.stem)
+            safety_label = str(
+                job.get("safety_label") or job.get("query_type") or "unknown"
+            )
+            progress.set_postfix_str(f"{safety_label}/{style} {item_id}", refresh=False)
+            if output.exists() and not job_overwrite(job, args):
+                continue
+            synthesize_to_file(
+                torch=torch,
+                torchaudio=torchaudio,
+                model=model,
+                text=text_from_job(job),
+                style=style,
+                style_instruction=style_instruction,
+                prompt_audio=prompt_audio,
+                output=output,
+                announce=False,
+            )
+    finally:
+        progress.close()
     print(f"[cosyvoice2] batch complete {total} jobs from {args.batch_jsonl}", flush=True)
 
 

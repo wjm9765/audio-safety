@@ -28,10 +28,19 @@ conversion_gap:
     transcript_outputs_file: manifests/audio_rdo_attack_flip_transcript_outputs.jsonl
 
   judge:
-    # §8 direction-finding fast path: one blinded, cheap lower-version Gemini flash
-    # judge. A multi-judge / human audit is deferred to a paper-facing run.
+    # §8 direction-finding judge.
+    # FORCED DEVIATION 2026-07-12: the pinned `google/gemini-2.0-flash-001`
+    # now returns HTTP 404 "No endpoints found" on OpenRouter (Gemini 2.0 Flash
+    # deprecated). Per a Codex(gpt-5.6-sol xhigh) consult, substituted the nearest
+    # available successor as PRIMARY + an independent Claude judge as a
+    # judge-robustness cross-check (analyze_flip reports per-judge flip/DiD/
+    # interaction + Cohen's kappa). Applies ONLY to this §8 direction-finding run;
+    # does NOT amend the pre-registered §0 criteria. Original pinned judge kept for
+    # provenance: google/gemini-2.0-flash-001
+    # See docs/experiments/exp1_refusal_cone_drift/run4_judge_deviation_20260712.md
     models:
-      - google/gemini-2.0-flash-001
+      - google/gemini-2.5-flash      # primary (successor to user-confirmed 2.0-flash)
+      - anthropic/claude-haiku-4.5   # independent robustness judge (forced-deviation cross-check)
     temperature: 0.0
     batch_size: 8
     max_concurrency: 4
@@ -43,6 +52,25 @@ conversion_gap:
   t0:
     primary_style: neutral
     require_both_judges: false
+
+# Stage-B-style mechanism probe REUSED for the §8 flip sensor/actuator dissociation
+# test (added 2026-07-12, direction-finding). c_R (r_A occupancy) @ P2/layer16 and
+# cross-fit r_H @ P1 content position, captured per style (neutral vs jb_pap/jb_ica)
+# so the flip set can be tested for: r_H preserved while r_A attenuated. The frozen
+# r_A axis is passed via --axis-artifact (no absolute path in config).
+conversion_probe:
+  enabled: true
+  frozen_axis_artifact: null
+  c_r_position: first_generation_prelogit   # P2 (decision) for c_R via r_A
+  c_h_position: assistant_start_pre         # P1 (content) for cross-fit r_H
+  c_r_layer: 16
+  c_h_layers: [8, 12, 16]
+  n_cross_fit_folds: 5
+  n_random_directions: 999
+  harmfulness_preserved_max_sd: 0.3
+  refusal_underdriven_min_sd: 0.3
+  specificity_min_ratio: 2.0
+  readout_min_auroc: 0.65
 
 # §8 attack-induced-flip analysis (design §8.3-8.4). Descriptive, no hard gate.
 attack_flip:

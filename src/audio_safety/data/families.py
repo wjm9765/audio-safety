@@ -93,9 +93,18 @@ def _split_jobs_round_robin(
     return [shard for shard in shards if shard]
 
 
-def _batch_worker_env(tts_cfg: TtsConfig, worker_index: int) -> dict[str, str]:
+def _batch_worker_env(
+    tts_cfg: TtsConfig,
+    worker_index: int,
+    num_workers: int,
+) -> dict[str, str]:
     env = os.environ.copy()
     env.update(tts_cfg.batch_worker_env)
+    # The isolated TTS wrapper uses these values to draw one shard-level progress
+    # bar per long-lived worker. Keep this out of the command template so any
+    # compatible batch adapter can ignore the metadata without special CLI args.
+    env["AUDIO_SAFETY_TTS_WORKER_INDEX"] = str(worker_index)
+    env["AUDIO_SAFETY_TTS_NUM_WORKERS"] = str(num_workers)
     if tts_cfg.batch_worker_cuda_devices:
         device = tts_cfg.batch_worker_cuda_devices[
             worker_index % len(tts_cfg.batch_worker_cuda_devices)
@@ -131,7 +140,7 @@ def _run_batch_shards(
             batch_command,
             check=True,
             timeout=None,
-            env=_batch_worker_env(tts_cfg, 0),
+            env=_batch_worker_env(tts_cfg, 0, 1),
         )
         return
 
@@ -164,7 +173,7 @@ def _run_batch_shards(
                 command,
                 subprocess.Popen(
                     command,
-                    env=_batch_worker_env(tts_cfg, worker_index),
+                    env=_batch_worker_env(tts_cfg, worker_index, len(shards)),
                 ),
             )
         )
@@ -441,7 +450,8 @@ def render_audio_records(
         if missing:
             examples = ", ".join(missing[:3])
             raise RuntimeError(
-                f"TTS batch command completed but {len(missing)} output files are missing: {examples}"
+                "TTS batch command completed but "
+                f"{len(missing)} output files are missing: {examples}"
             )
         for record in records:
             if record["status"] == "queued":

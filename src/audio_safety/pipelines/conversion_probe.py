@@ -74,8 +74,14 @@ def _conversation_and_inputs(
 
 
 def _capture_at(model: Any, inputs: Any, *, token_index: int, layers) -> dict[int, np.ndarray]:
+    # Inference-only capture: no_grad avoids building the autograd graph, which
+    # otherwise ~doubles peak activation memory per forward and OOMs on longer
+    # (e.g. jailbreak-wrapped audio) sequences. Captured hidden states are identical.
+    import torch
+
     with ResidualStreamCapture(model, token_index=token_index, layers=layers) as cap:
-        model(**inputs)
+        with torch.no_grad():
+            model(**inputs)
     return {layer: tensor.numpy() for layer, tensor in cap.states().items()}
 
 
@@ -120,12 +126,16 @@ def extract_conversion_activations(
     if probe_cfg is None:
         raise ValueError("conversion_probe config is required for Stage B extraction")
 
+    import torch
+
     ch_stacks, cr_hiddens, cr_layers, metadata = [], [], [], []
     for idx, row in enumerate(tqdm(rows, desc="conversion capture", unit="row")):
         captured = capture_row(model, processor, row, cfg, data_dir, r_a, probe_cfg)
         ch_stacks.append(captured["ch_stack"])
         cr_hiddens.append(captured["cr_hidden"])
         cr_layers.append(captured["cr_by_layer"])
+        if torch.cuda.is_available() and idx % 20 == 0:
+            torch.cuda.empty_cache()
         metadata.append(
             {
                 "activation_index": idx,

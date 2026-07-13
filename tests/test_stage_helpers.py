@@ -1,11 +1,12 @@
-import json
-import sys
+import os
 
 import pytest
 
-from audio_safety.config.schema import AudioRdoDatasetConfig
+from audio_safety.config.schema import AudioRdoDatasetConfig, TtsConfig
 from audio_safety.data.datasets import AudioRdoPair
 from audio_safety.data.families import (
+    _batch_worker_env,
+    _split_jobs_round_robin,
     render_audio_records,
     score_transcript_records,
     skip_transcript_control_records,
@@ -101,3 +102,17 @@ def test_render_audio_records_dry_run_formats_tts_command(tmp_path):
     assert records[0]["status"] == "planned"
     assert records[0]["command"][:2] == ["./scripts/cosyvoice2_tts.py", "--text-json"]
     assert records[0]["command"][-1].endswith("audio/harmful/neutral/x1.wav")
+
+
+def test_three_tts_workers_split_900_jobs_evenly_and_receive_progress_metadata():
+    jobs = [{"index": index} for index in range(900)]
+    shards = _split_jobs_round_robin(jobs, workers=3)
+    assert [len(shard) for shard in shards] == [300, 300, 300]
+    assert {job["index"] for shard in shards for job in shard} == set(range(900))
+
+    cfg = TtsConfig(batch_worker_env={"CUSTOM_ENV": "kept"})
+    env = _batch_worker_env(cfg, worker_index=1, num_workers=3)
+    assert env["AUDIO_SAFETY_TTS_WORKER_INDEX"] == "1"
+    assert env["AUDIO_SAFETY_TTS_NUM_WORKERS"] == "3"
+    assert env["CUSTOM_ENV"] == "kept"
+    assert set(os.environ).issubset(env)
