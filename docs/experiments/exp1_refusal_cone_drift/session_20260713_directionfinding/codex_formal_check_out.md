@@ -1,0 +1,9 @@
+**1 — Collision:** No exact LALM acoustic-refusal certificate found through 2026-07-13, so the intersection appears open.  
+But the object is largely generic robustness radius: [RS for VLMs](https://arxiv.org/abs/2509.16088) already certifies judge-mapped harmful/harmless generative outputs and bounds oracle error; [cost-sensitive RS](https://proceedings.mlr.press/v267/xin25a.html) covers asymmetric bad transitions.  
+Audio certificates already exist for [ASR](https://arxiv.org/abs/2112.03000), [speaker recognition](https://arxiv.org/abs/2404.18791), while [AJailBench](https://arxiv.org/abs/2505.15406) supplies semantic acoustic transforms—but not radii.  
+**2 — Feasibility:** Black-box access is fine, but RS certifies the *smoothed composite* `majority(judges(model(T(x))))`, not invariance of the original LALM verdict.  
+Two judges require a validated error/disagreement bound; otherwise the guarantee is only “relative to these judges.” Fix decoding randomness or explicitly include it.  
+Waveform ℓ₂/JND balls risk vacuous or false semantics; audio preprocessing alone can alter effective geometry by 230–351× ([warning](https://arxiv.org/abs/2606.04210)).  
+Pitch/time/gain/reverb need a low-dimensional parameter-space metric plus composition/interpolation proof; sampling alone cannot certify non-existence.  
+An A40 pilot is affordable only as a 20–50-input, ~100–1,000-sample abstaining certificate test—not yet a margin study.  
+**3 — Verdict: 5.5/10, CONDITIONAL GREENLIGHT for the cheap pilot only; ICLR ceiling is borderline reject unless you derive a genuinely new acoustic-transformation/JND certificate—otherwise this is an audio application of EMNLP’25 RS.**

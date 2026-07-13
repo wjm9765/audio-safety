@@ -9,7 +9,50 @@ active next design is the Run 4 conversion/writer test audited below.
 
 ## Current State (updated 2026-07-13)
 
-> **2026-07-13 — 방향 확정 + 코드: Causal Attribution of Audio Safety Failures
+> **세션 전체 기록(브리프·Codex 8라운드·pilot 리포트):**
+> [session_20260713_directionfinding/](./session_20260713_directionfinding/README.md).
+> 확정 방향 스펙: [run5_acoustic_safety_margin_direction_20260713.md](./run5_acoustic_safety_margin_direction_20260713.md).
+
+> **2026-07-13 (저녁) — 실행 결과: causal-attribution 방향 NULL/DEAD + 피벗 재탐색.**
+> 위에서 lock한 causal-attribution 방향을 A40에서 실행했다(런: `run4_causal_trace{,_greedy}`,
+> L20/L24/L28 sweep; 결정 브리프 `outputs/run4_causal_attribution_DECISION.md`, results.md 항목 추가).
+> **결과 NOT-ALIVE:** greedy 재실행에서 identity invariance는 TRUE(0/19; 초기 VOID는 do_sample=true
+> 디코딩 아티팩트였고 `do_sample=False`로 수정)지만, `same_item`이 `wrong_item`을 못 이기고(L16·L20
+> 동일 패턴) `reverse`가 compliance가 아니라 refusal로 역전 — full-state patch가 jailbreak의
+> item-specific 인과 내용이 아니라 generic clean/refusal-promoting state를 옮길 뿐. Codex blind
+> 교차검증도 독립 NOT-ALIVE. §8 null(interaction≈0)과 정합. **문헌 선점(검증됨):** Alignment
+> Curse(2602.02557), JALMBench(2505.17568, Qwen2-Audio matched taxonomy), SPIRIT(2505.13541,
+> Qwen2-Audio clean-activation patching), ReGap(2605.18104), 2603.13768(Qwen audio causal tracing,
+> late fusion). 우리 공격은 text-transferred PAP/ICA·neutral TTS — 문헌이 이미 "audio-specific 아님"이라
+> 답한 영역. **Codex 3라운드(web-grounded) 피벗 탐색:** (A) "acoustic jailbreak 인과 factorization /
+> 순수 paralinguistic 분리"는 VoxParadox(2605.27772, "audio LLM은 read>listen", Qwen2-Audio 음향 정확도
+> 14.85%) + Run-3 style null + Acoustic Interference(2605.18168) 선점으로 **DROP**(~10% ICLR-worthy).
+> (B) **best-available = "Clarify, Don't Guess: 국소적 음향 불확실성 하의 위험-보정 안전"** — refusal
+> 메커니즘이 아니라 audio-native 안전 *능력*(안전-결정 clause가 안 들릴 때 되묻는가 vs 추측·응락).
+> cheap A40 kill-test 명세됨, ICLR 5→6(멀티모델+human calibration+mitigation 시).
+> **그 후 load-bearing kill-test까지 실행(clause-localized masking + Qwen ASR gate + behavior;
+> `outputs/run4_pivotB_killtest/`): crit_mask에서 안전-결정 span이 완벽 제거(ASR recovered 0.00,
+> 대조 nonc_mask 0.91)됐는데 모델은 되묻지도 거부하지도 않고 echo/benign-confabulate("manufacture
+> illegal drugs"→"manage stress"), confabulation이 benign이라 harmful compliance는 오히려 하락
+> (25%→12%). 예측된 unsafe-guessing 부재 → Codex 라운드5 blind 판정 = KILL(safety framing).
+> reliability reframe(confabulation-not-clarification)도 3/10·포화(HalluAudio 2604.19300 ACL26,
+> SHALLOW 2510.16567, AHA, AbstentionBench 검증됨).** **최종(Claude+Codex 합의): 현 자산으로
+> greenlight 가능한 ICLR audio-safety 방향 없음 — Pivot B를 negative로 동결, pivot chain 중단,
+> literature-first novelty screen 후 새 문제 선정.** **메타 결론: audio refusal-mechanism +
+> audio-reliability/hallucination 공간 모두 2025-26 문헌으로 포화. 현재 방향으로 논문 쓰지 말 것.**
+> design.md §0/§1·run4 §0 불변, results.md append-only.
+> **🟢 그 후 reviewer-endorsed "new formal object" 경로에서 방향 확정: "Certified Acoustic Safety
+> Margin for LALMs"** (스펙: [run5_acoustic_safety_margin_direction_20260713.md](./run5_acoustic_safety_margin_direction_20260713.md)).
+> harmful 입력의 refusal 판정이 불변인 content-preserving 음향-섭동 반경을 randomized smoothing으로 인증.
+> Pilot(`run4_acoustic_margin/`, 20 items×~40 섭동): **18/20 certified-refusal-robust, 2/20 BRITTLE**
+> (정상 거부되는 harmful 요청이 사소한 pitch/speed/gain 변형에 ~70% 응락 — deploy-time safety hole).
+> certificate가 robust vs brittle을 discriminate. **양 리뷰어(Claude+Codex) CONDITIONAL GREENLIGHT —
+> 세션 최초의 start-build 승인.** make-or-break = perceptually-calibrated JND transform box 위의
+> **결정론적(non-vacuous) certificate**(sampling-CP 아님). 성공 시 ICLR 7/10, 실패 시 5/10. 이것이
+> "generic RS의 audio 적용"을 넘는 유일한 novelty 축. 종료 조건 충족(meaningful result + dual-agent
+> ICLR 착수 승인).
+
+> **2026-07-13 (낮) — 방향 확정 + 코드: Causal Attribution of Audio Safety Failures
 > (명세+구현: [run4_causal_attribution_20260713.md](./run4_causal_attribution_20260713.md)).**
 > Codex(gpt-5.6-sol, xhigh) 2라운드 deep-discussion + Claude 코드 감사로 sensor–actuator 헤드라인을
 > 폐기하고 **"Is It Really an Audio Jailbreak? — 오디오 안전 실패의 인과적 귀속"** 으로 확정했다.
