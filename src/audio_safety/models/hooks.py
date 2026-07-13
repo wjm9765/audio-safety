@@ -16,6 +16,31 @@ DECODER_LAYER_PATHS = (
     "layers",
 )
 
+AUDIO_TOWER_PATHS = (
+    "model.audio_tower",
+    "audio_tower",
+)
+
+MULTIMODAL_PROJECTOR_PATHS = (
+    "model.multi_modal_projector",
+    "multi_modal_projector",
+)
+
+
+def _resolve_module(model: Any, paths: tuple[str, ...], description: str) -> Any:
+    for path in paths:
+        node = model
+        try:
+            for attr in path.split("."):
+                node = getattr(node, attr)
+        except AttributeError:
+            continue
+        return node
+    tried = ", ".join(paths)
+    raise AttributeError(
+        f"could not locate {description} on {type(model).__name__}; tried: {tried}"
+    )
+
 
 def get_decoder_layers(model: Any) -> list[Any]:
     """Locate the decoder layer stack across wrapper variants.
@@ -38,6 +63,25 @@ def get_decoder_layers(model: Any) -> list[Any]:
     raise AttributeError(
         f"could not locate decoder layers on {type(model).__name__}; tried: {tried}"
     )
+
+
+def get_audio_tower(model: Any) -> Any:
+    """Locate the Qwen2-Audio encoder module across wrapper variants."""
+    return _resolve_module(model, AUDIO_TOWER_PATHS, "audio tower")
+
+
+def get_audio_encoder_layers(model: Any) -> list[Any]:
+    """Return every transformer block in the Qwen2-Audio encoder."""
+    tower = get_audio_tower(model)
+    layers = list(getattr(tower, "layers", ()))
+    if not layers:
+        raise AttributeError(f"audio tower {type(tower).__name__} exposes no encoder layers")
+    return layers
+
+
+def get_multimodal_projector(model: Any) -> Any:
+    """Locate the audio-to-language projector across wrapper variants."""
+    return _resolve_module(model, MULTIMODAL_PROJECTOR_PATHS, "multimodal projector")
 
 
 def _select_layers(all_layers: list[Any], layers: Iterable[int] | None) -> list[tuple[int, Any]]:
@@ -114,6 +158,202 @@ class ResidualStreamCapture:
                 "was a forward pass run inside the context?"
             )
         return dict(self._acts)
+
+
+class AudioPathCapture:
+    """Capture pooled Qwen2-Audio states through encoder, projector, and LLM.
+
+    The context is intentionally restricted to a batch of one conversation with
+    one audio. It stores only valid-frame/span means and last positions, avoiding
+    the very large padded full-sequence activations produced by Qwen2-Audio.
+
+    Decoder layer ``i`` is captured after block ``i``. P1/P2 must be resolved from
+    the same processor-expanded prompt used to build ``audio_positions``.
+    """
+
+    def __init__(
+        self,
+        model: Any,
+        *,
+        audio_positions: Iterable[int],
+        p1_index: int,
+        p2_index: int,
+        encoder_valid_length: int,
+        projector_valid_length: int,
+        decoder_layers: Iterable[int] | None = None,
+    ):
+        positions = sorted({int(position) for position in audio_positions})
+        if not positions:
+            raise ValueError("audio_positions must contain at least one projected audio token")
+        if p1_index < 0 or p2_index < 0:
+            raise ValueError("P1/P2 must be non-negative absolute prompt indices")
+        if encoder_valid_length < 1 or projector_valid_length < 1:
+            raise ValueError("encoder/projector valid lengths must be positive")
+        if len(positions) != projector_valid_length:
+            raise ValueError(
+                "projected audio-token count does not match projector valid length: "
+                f"{len(positions)} != {projector_valid_length}"
+            )
+
+        self._encoder_layers = list(enumerate(get_audio_encoder_layers(model)))
+        self._projector = get_multimodal_projector(model)
+        self._decoder_layers = _select_layers(get_decoder_layers(model), decoder_layers)
+        self._audio_positions = positions
+        self._p1_index = int(p1_index)
+        self._p2_index = int(p2_index)
+        self._encoder_valid_length = int(encoder_valid_length)
+        self._projector_valid_length = int(projector_valid_length)
+
+        self._handles: list[Any] = []
+        self._encoder: dict[int, dict[str, Any]] = {}
+        self._projected: dict[str, Any] = {}
+        self._decoder: dict[int, dict[str, Any]] = {}
+
+    @staticmethod
+    def _hidden(output: Any) -> Any:
+        return output[0] if isinstance(output, tuple) else output
+
+    @staticmethod
+    def _valid_pool(hidden: Any, valid_length: int, *, name: str) -> dict[str, Any]:
+        if hidden.ndim != 3 or hidden.shape[0] != 1:
+            raise ValueError(
+                f"{name} capture expects hidden shape (1, time, dim), got {tuple(hidden.shape)}"
+            )
+        if valid_length > hidden.shape[1]:
+            raise ValueError(
+                f"{name} valid length {valid_length} exceeds sequence length {hidden.shape[1]}"
+            )
+        valid = hidden[0, :valid_length, :].detach().float()
+        return {
+            "mean": valid.mean(dim=0).cpu(),
+            "last": valid[-1].cpu(),
+        }
+
+    def _encoder_hook(self, layer_idx: int):
+        def hook(module: Any, inputs: Any, output: Any) -> None:
+            if layer_idx in self._encoder:
+                raise RuntimeError(
+                    "AudioPathCapture encoder hook fired more than once; use one direct forward"
+                )
+            hidden = self._hidden(output)
+            self._encoder[layer_idx] = self._valid_pool(
+                hidden,
+                self._encoder_valid_length,
+                name=f"audio encoder layer {layer_idx}",
+            )
+
+        return hook
+
+    def _projector_hook(self, module: Any, inputs: Any, output: Any) -> None:
+        if self._projected:
+            raise RuntimeError(
+                "AudioPathCapture projector hook fired more than once; use one direct forward"
+            )
+        hidden = self._hidden(output)
+        self._projected = self._valid_pool(
+            hidden,
+            self._projector_valid_length,
+            name="audio projector",
+        )
+
+    def _decoder_hook(self, layer_idx: int):
+        def hook(module: Any, inputs: Any, output: Any) -> None:
+            import torch
+
+            if layer_idx in self._decoder:
+                raise RuntimeError(
+                    "AudioPathCapture decoder hook fired more than once; use one direct forward"
+                )
+            hidden = self._hidden(output)
+            if hidden.ndim != 3 or hidden.shape[0] != 1:
+                raise ValueError(
+                    "decoder capture expects hidden shape (1, prompt, dim), "
+                    f"got {tuple(hidden.shape)}"
+                )
+            required_last = max(self._audio_positions[-1], self._p1_index, self._p2_index)
+            if required_last >= hidden.shape[1]:
+                raise ValueError(
+                    f"semantic position {required_last} exceeds decoder length {hidden.shape[1]}"
+                )
+            row = hidden[0].detach()
+            audio_indices = torch.as_tensor(
+                self._audio_positions,
+                dtype=torch.long,
+                device=row.device,
+            )
+            audio = row.index_select(0, audio_indices).float()
+            self._decoder[layer_idx] = {
+                "audio_mean": audio.mean(dim=0).cpu(),
+                "audio_last": audio[-1].cpu(),
+                "p1": row[self._p1_index].float().cpu(),
+                "p2": row[self._p2_index].float().cpu(),
+            }
+
+        return hook
+
+    def __enter__(self) -> "AudioPathCapture":
+        self._encoder.clear()
+        self._projected.clear()
+        self._decoder.clear()
+        self._handles = [
+            layer.register_forward_hook(self._encoder_hook(layer_idx))
+            for layer_idx, layer in self._encoder_layers
+        ]
+        self._handles.append(self._projector.register_forward_hook(self._projector_hook))
+        self._handles.extend(
+            layer.register_forward_hook(self._decoder_hook(layer_idx))
+            for layer_idx, layer in self._decoder_layers
+        )
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        for handle in self._handles:
+            handle.remove()
+        self._handles = []
+
+    @property
+    def encoder_layer_indices(self) -> list[int]:
+        return [layer_idx for layer_idx, _ in self._encoder_layers]
+
+    @property
+    def decoder_layer_indices(self) -> list[int]:
+        return [layer_idx for layer_idx, _ in self._decoder_layers]
+
+    def states(self) -> dict[str, Any]:
+        """Return stacked CPU tensors after exactly one forward pass."""
+        import torch
+
+        if len(self._encoder) != len(self._encoder_layers):
+            raise RuntimeError(
+                f"captured {len(self._encoder)}/{len(self._encoder_layers)} encoder layers"
+            )
+        if not self._projected:
+            raise RuntimeError("multimodal projector was not captured")
+        if len(self._decoder) != len(self._decoder_layers):
+            raise RuntimeError(
+                f"captured {len(self._decoder)}/{len(self._decoder_layers)} decoder layers"
+            )
+
+        encoder_indices = self.encoder_layer_indices
+        decoder_indices = self.decoder_layer_indices
+        return {
+            "encoder_mean": torch.stack(
+                [self._encoder[layer]["mean"] for layer in encoder_indices]
+            ),
+            "encoder_last": torch.stack(
+                [self._encoder[layer]["last"] for layer in encoder_indices]
+            ),
+            "projector_mean": self._projected["mean"],
+            "projector_last": self._projected["last"],
+            "llm_audio_mean": torch.stack(
+                [self._decoder[layer]["audio_mean"] for layer in decoder_indices]
+            ),
+            "llm_audio_last": torch.stack(
+                [self._decoder[layer]["audio_last"] for layer in decoder_indices]
+            ),
+            "llm_p1": torch.stack([self._decoder[layer]["p1"] for layer in decoder_indices]),
+            "llm_p2": torch.stack([self._decoder[layer]["p2"] for layer in decoder_indices]),
+        }
 
 
 class ResidualStreamIntervention:
