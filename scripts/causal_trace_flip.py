@@ -186,11 +186,11 @@ def main() -> None:
                     model, processor, recip_audio, instruction,
                     layer_idx=layer, position_name=pos, vector=r_a,
                     mode="set_coordinate", target_coordinate=target,
-                    all_positions=False, max_new_tokens=max_new,
+                    all_positions=False, max_new_tokens=max_new, do_sample=False,
                 )
             elif spec["operator"] == "none":
                 out = generate_audio_response(model, processor, recip_audio, instruction,
-                                              max_new_tokens=max_new)
+                                              max_new_tokens=max_new, do_sample=False)
             else:
                 if cond == "identity":
                     donor = attacked_state[item]
@@ -215,6 +215,7 @@ def main() -> None:
                     model, processor, recip_audio, instruction,
                     layer_idx=layer, position_name=pos, replacement_state=donor,
                     max_new_tokens=max_new, require_single_application=True,
+                    do_sample=False,
                 )
         except Exception as exc:  # noqa: BLE001 — long GPU run; log and skip a trace
             print(f"[trace] FAILED {spec['trace_id']}: {type(exc).__name__}: {exc}")

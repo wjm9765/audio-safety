@@ -315,8 +315,15 @@ def generate_audio_response(
     *,
     max_new_tokens: int = 128,
     system_prompt: str = "You are a helpful assistant.",
+    do_sample: bool = True,
 ) -> str:
-    """Run one local Qwen2-Audio audio-analysis generation."""
+    """Run one local Qwen2-Audio audio-analysis generation.
+
+    ``do_sample=False`` forces greedy (deterministic) decoding, which is required
+    for interchange/activation-patching traces: with the model's default sampling
+    config, an identity self-patch would not reproduce the unpatched output and
+    condition contrasts would be dominated by decoding noise.
+    """
     conversation = build_audio_analysis_conversation(
         audio_path,
         instruction,
@@ -325,7 +332,9 @@ def generate_audio_response(
     device = model_input_device(model)
     inputs = prepare_qwen2_audio_inputs(processor, conversation, device=device)
     prompt_len = inputs.input_ids.shape[1]
-    generate_ids = model.generate(**inputs, max_new_tokens=max_new_tokens)
+    generate_ids = model.generate(
+        **inputs, max_new_tokens=max_new_tokens, do_sample=do_sample
+    )
     generate_ids = generate_ids[:, prompt_len:]
     return processor.batch_decode(
         generate_ids,
@@ -377,6 +386,7 @@ def generate_audio_response_with_intervention(
     all_positions: bool = False,
     max_new_tokens: int = 128,
     system_prompt: str = "You are a helpful assistant.",
+    do_sample: bool = True,
 ) -> str:
     conversation = build_audio_analysis_conversation(
         audio_path,
@@ -401,7 +411,9 @@ def generate_audio_response_with_intervention(
         target_coordinate=target_coordinate,
         all_positions=all_positions,
     ):
-        generate_ids = model.generate(**inputs, max_new_tokens=max_new_tokens)
+        generate_ids = model.generate(
+            **inputs, max_new_tokens=max_new_tokens, do_sample=do_sample
+        )
     generate_ids = generate_ids[:, prompt_len:]
     return processor.batch_decode(
         generate_ids,
@@ -456,6 +468,7 @@ def generate_audio_response_with_state_patch(
     max_new_tokens: int = 128,
     system_prompt: str = "You are a helpful assistant.",
     require_single_application: bool = True,
+    do_sample: bool = True,
 ) -> str:
     """Generate while replacing one residual state with a donor (interchange patch).
 
@@ -480,7 +493,9 @@ def generate_audio_response_with_state_patch(
         replacement_state=replacement_state,
     )
     with intervention:
-        generate_ids = model.generate(**inputs, max_new_tokens=max_new_tokens)
+        generate_ids = model.generate(
+            **inputs, max_new_tokens=max_new_tokens, do_sample=do_sample
+        )
     if require_single_application and intervention.applied_count != 1:
         raise RuntimeError(
             f"patch_state applied {intervention.applied_count} times, expected 1 "
