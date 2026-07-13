@@ -468,6 +468,51 @@ heldout (n=60): glm RD **+5.0pp** (CI −5.0..+15.0, p 0.254), laguna **+3.3pp**
 - **Cross-check:** Codex `gpt-5.6-sol` (high, web_search) rounds — `outputs/codex_formal_check_out.md`
   (5.5/10 conditional), `codex_final_greenlight_out.md` (CONDITIONAL GREENLIGHT, commit).
 
+### cand4_correction_gate — 2026-07-13 PM (Candidate-4 internal-representation direction → NO-GO)
+
+- **Context:** user re-opened the LALM **internal-representation** vein (Candidate 4: attack-family residual
+  subspaces → cross-family defense-transfer prediction). Pre-registration + gate rule:
+  `session_20260713_directionfinding/cand4_correction_prereg.md`. Direction-finding, NOT an exp1 §0 gate.
+- **Codex round-1 (blind, `outputs/codex_cand4_plan_out.md`): NO-GO, 8%.** Fatal identification flaw: the
+  "geometry predicts transfer" statistic's unit of analysis is the **family-PAIR** (≈6 relationships with a
+  feasible 3–4 attacks; |ρ|≥0.886 needed for p<.05) — untestable in scope; item count cannot repair it.
+  Cheap AdvWave/AIA aren't the published mechanisms; the behavioral endpoint aims at the prior r_A-rescue null.
+- **Pivot to Codex's own make-or-break item-scale gate:** does an attacked-regime, r_A-removed, family-specific
+  additive correction (h−α·unit(μ_f) at L16, all-token) restore refusal better than norm-matched random AND
+  than frozen r_A? Judge-free endpoint = first-token refusal-logit margin M. Attack = `jb_pap` (already
+  rendered, no new TTS). Run `outputs/cand4_correction_gate/` (`gate_jb_pap_metrics.json`,
+  `gate2_jb_pap_specificity.json`, `analysis.md`).
+- **Result = FAIL (on sign + own baseline, not power).** Endpoint valid (refused +1.92 vs complied −2.45,
+  sep 4.37). Held-out flips n=13. Across scales 4/6/8/10: muf ΔM_harmful ≈ −0.02..−0.04 (moves harmful the
+  WRONG way; 44th–70th pct of random), muf < rA_add specificity at every scale (gap widens). The only positive
+  contrast (specificity p≈0.049) is a **benign-margin artifact** (muf lowers benign more; ΔM_H≈0). `pooled`
+  fails too. clean-patch oracle +1.33.
+- **Coherent positive (reconciliation):** rA_add raises harmful refusal (+0.49→+1.23) but always with
+  proportional **benign over-refusal** (+0.19→+0.58, ≈2:1). Reconciles the prior "r_A rescue ≈ random"
+  null (small α, behavioral) with this run (r_A ≫ random on margin): **r_A is causally real but blunt — no
+  norm gives a clean attack-specific rescue; there is no safe internal correction.** Motivates the black-box
+  certificate from evidence.
+- **Geometry (bounded null, not vacuous):** harmful-specific displacement is >99.96% orthogonal to r_A in
+  energy (item-bootstrap |cos|<0.023; ~1.4× chance), high-dimensional (PR≈36), generic-dominated
+  (consistency 0.44 vs harmful-side 0.79). Audio instance of harmfulness-vs-refusal dissociation; NOT a
+  "distinct orthogonal mechanism" (geometric orthogonality ≠ functional independence).
+- **Cross-check (dual-agent, both blind/independent):** Codex round-2 (`outputs/codex_cand4_r2_out.md`) =
+  NO-GO, **8%→3%**; corrected the orthogonality over-claim. Independent adversarial ICLR reviewer = NO-GO
+  affirmed **~5%**, "fails on sign not power"; flagged fixes (disclose 40-vs-50 null deviation, drop the
+  p=.049 framing, bound don't delete orthogonality, reconcile r_A contradiction) — all applied in `analysis.md`.
+- **jb_prefix robustness (strong directed attack; `outputs/cand4_prefix/`, n=57, 20 flips, heldout n=8):**
+  refines but does not overturn. muf DOES raise the harmful margin and beats random on ΔM_H (p=0.040) —
+  because a strong directed attack has a large consistent displacement to reverse — but harmful:benign ≈1.7:1
+  vs r_A's ≈4.5:1, so at matched benign cost r_A dominates and muf adds no value; it is a generic
+  perturbation-reversal, not a harmful-specific safety correction. n=8 underpowered. Conclusion unchanged.
+- **Decision:** `NO-GO` on the internal-representation direction (dual-agent convergent, target 70%
+  confidence NOT reached — reviewers at 3–5%; both attacks confirm no safe attack-specific internal
+  correction). **Recommendation: fold the mechanistic negative as a Pareto-framed white-box audit section into
+  the greenlit black-box Certified Acoustic Safety Margin study** (run5 direction); do not pursue standalone.
+- **Deviations/caveats:** used 40 (not ≥50) random null dirs (immaterial; outcome fails at 44–70th pct); one
+  attack/model/site for the gate; family-mean (not rank-k) correction tested. "Neighborhood closed" is a
+  cumulative-dossier judgment, not carried by this 13-flip gate alone.
+
 <!-- ENTRY TEMPLATE:
 
 ### <run_name> — YYYY-MM-DD

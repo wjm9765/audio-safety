@@ -48,6 +48,21 @@ perceptual box." Keep these separate in all claims.
   margin-improving defense (interface-level smoothing/aug) evaluated on the brittle tail.
 - Re-run the novelty screen at submission time (space moves monthly).
 
+## Pivot de-risking probe (2026-07-13 PM, after the internal-direction NO-GO)
+`outputs/cand4_jnd_probe/jnd_margin_probe.json` — quick feasibility probe of Codex's make-or-break risk
+("a certificate over a DISCONTINUOUS black-box judge verdict may be infeasible; certify a model-side
+CONTINUOUS refusal margin instead"). 5 harmful items × a 5×3 pitch/gain JND grid; endpoint = the
+first-token refusal-logit margin (from the internal-direction work). Result: the continuous margin is
+**bounded-variation over the box** (max adjacent-cell jump ~1.2–4.0, NO discontinuities), **sign-stable for
+3/5 items** (certifiable-robust; e.g. margin ∈ [+1.87,+5.15] all-refuse or [−4.65,−1.84] all-comply) and
+**cleanly sign-flipping for 2/5** (located brittle counterexamples, margin crosses 0 inside the box). This
+supports the continuous-margin certificate route and suggests the deterministic JND-box certificate is
+**feasible via a valid modulus-of-continuity bound + adaptive refinement near the margin=0 boundary** — the
+coarse 1.5st grid is too sparse to exclude a narrow flip by sampling alone (confirming a sound bound, not a
+dense grid, is required). **First full-build experiment (Codex r3): certify one robust + one brittle item on
+a 2-D JND box via adaptive interval branch-and-bound with a mathematically valid bound; do not scale until
+that works.**
+
 ## Caveats (Claude)
 - The pilot is sampling-based (= generic RS) — the paper's novelty rests ENTIRELY on the deterministic
   JND certificate landing. If that proves infeasible on a black-box judge-defined verdict, the direction
