@@ -7,7 +7,22 @@ folder name remains `exp1_refusal_cone_drift` for repository continuity, but the
 completed first phase was the **Audio-RDO Refusal Axis Existence Gate** and the
 active next design is the Run 4 conversion/writer test audited below.
 
-## Current State (updated 2026-07-12)
+## Current State (updated 2026-07-13)
+
+> **2026-07-13 — 방향 확정 + 코드: Causal Attribution of Audio Safety Failures
+> (명세+구현: [run4_causal_attribution_20260713.md](./run4_causal_attribution_20260713.md)).**
+> Codex(gpt-5.6-sol, xhigh) 2라운드 deep-discussion + Claude 코드 감사로 sensor–actuator 헤드라인을
+> 폐기하고 **"Is It Really an Audio Jailbreak? — 오디오 안전 실패의 인과적 귀속"** 으로 확정했다.
+> 근거: (1) sensor/actuator 개념은 [2507.11878](https://arxiv.org/abs/2507.11878)이 텍스트에서 이미
+> **인과적으로** 선점(우리 §8 causal rescue는 NEGATIVE), (2) §8 데이터에 audio-specificity 부재
+> (interaction≈0, benign DiD≈0; JALMBench Qwen2-Audio 7.3≈6.9와 정합). 새 방향은 결과가 어느 쪽이든
+> (오디오-특이 메커니즘 있음/없음) 논문이 되는 **outcome-robust** 프레이밍이며 negative를 기여로 전환한다.
+> 리뷰어 예측(Codex+Claude, 실행 가정): MVP floor 7(accept) / target 8 / ceiling 9. 구현: interchange-
+> patching(`patch_state`) causal-trace 파이프라인 + 무조건 τ estimand
+> (`models/hooks.py`, `evaluation/causal_trace.py`, `scripts/causal_trace_flip.py`·`judge_traces.py`·
+> `analyze_causal_trace.py`, config `causal_trace` 블록; `uv run pytest` green). 스코프: **Qwen2-Audio
+> 단독 direction-finding**(엄격성 완화 — 2nd model·human audit·exact-protocol은 방향이 살면 이후). §0/§1·
+> `design.md` 불변, `results.md` append-only(실행 후 항목 추가).
 
 > **2026-07-12 — 방향 전환: attack-induced-flip (명세: [run4_conversion_gap_design.md](./run4_conversion_gap_design.md) §8).**
 > matched-neutral conversion-gap 라인(Stage A T0 RD +2.7pp n.s.; Stage B UNRESOLVED)은 세팅 버그가

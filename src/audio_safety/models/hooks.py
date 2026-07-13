@@ -8,7 +8,6 @@ the token index from the same Qwen chat template used for inference.
 from collections.abc import Iterable
 from typing import Any
 
-
 DECODER_LAYER_PATHS = (
     "model.language_model.layers",
     "language_model.layers",
@@ -125,6 +124,10 @@ class ResidualStreamIntervention:
     - ``ablate``: h[p] <- h[p] - <h[p], unit(vector)> unit(vector)
     - ``set_coordinate``: h[p] is moved only along vector so its signed coordinate
       equals ``target_coordinate``.
+    - ``patch_state``: h[p] is REPLACED by ``replacement_state`` (a full d_model
+      donor hidden state captured from another run). This is interchange /
+      activation patching for causal tracing, NOT a directional edit: the donor
+      is used verbatim and is never normalized. Single-position, prefill-only.
 
     Scope:
     - default (``all_positions=False``): intervene only at the single residual
@@ -146,17 +149,34 @@ class ResidualStreamIntervention:
         *,
         layer_idx: int,
         token_index: int | None = None,
-        vector: Any,
+        vector: Any = None,
         mode: str,
         scale: float = 1.0,
         target_coordinate: float | Any | None = None,
+        replacement_state: Any | None = None,
         all_positions: bool = False,
         eps: float = 1e-12,
     ):
-        if mode not in {"add", "ablate", "set_coordinate"}:
+        if mode not in {"add", "ablate", "set_coordinate", "patch_state"}:
             raise ValueError(f"unsupported intervention mode {mode!r}")
-        if not all_positions and token_index is None:
-            raise ValueError("token_index is required unless all_positions is True")
+        if mode == "patch_state":
+            # Interchange patching: a donor full-state replacement at one absolute
+            # prefill position. A negative token_index would resolve to position 0
+            # on every length-1 cached decode step and silently repatch every
+            # generated token, so require a non-negative absolute index.
+            if replacement_state is None:
+                raise ValueError("patch_state mode requires replacement_state")
+            if all_positions:
+                raise ValueError("patch_state does not support all_positions")
+            if token_index is None or token_index < 0:
+                raise ValueError(
+                    "patch_state requires a non-negative absolute token_index"
+                )
+        else:
+            if vector is None:
+                raise ValueError(f"{mode!r} mode requires a vector")
+            if not all_positions and token_index is None:
+                raise ValueError("token_index is required unless all_positions is True")
         self._layer = get_decoder_layers(model)[layer_idx]
         self._layer_idx = layer_idx
         self._token_index = token_index
@@ -164,8 +184,10 @@ class ResidualStreamIntervention:
         self._mode = mode
         self._scale = scale
         self._target_coordinate = target_coordinate
+        self._replacement_state = replacement_state
         self._all_positions = all_positions
         self._eps = eps
+        self._applied_count = 0
         self._handle: Any | None = None
 
     def _edit(self, current: Any, vector: Any) -> Any:
@@ -202,10 +224,41 @@ class ResidualStreamIntervention:
             )
         return current + (target - coord).unsqueeze(-1) * vector
 
+    def _patch_state_hook(self, output: Any, hidden: Any) -> Any:
+        import torch
+
+        # Non-negative absolute prefill index. During KV-cached decode steps the
+        # forward pass sees a length-1 slice, so this index is out of range and the
+        # patch is skipped: the donor state is injected exactly once, at prefill.
+        token_index = self._token_index
+        if token_index >= hidden.shape[1]:
+            return output
+        if hidden.shape[0] != 1:
+            raise ValueError("patch_state requires batch size 1")
+        donor = self._replacement_state
+        if not torch.is_tensor(donor):
+            donor = torch.as_tensor(donor)
+        donor = donor.reshape(-1).to(device=hidden.device, dtype=hidden.dtype)
+        if donor.shape[0] != hidden.shape[-1]:
+            raise ValueError(
+                f"replacement_state dim {donor.shape[0]} != hidden dim {hidden.shape[-1]}"
+            )
+        current = hidden[:, token_index, :]
+        token_mask = torch.nn.functional.one_hot(
+            torch.tensor(token_index, device=hidden.device),
+            num_classes=hidden.shape[1],
+        ).to(dtype=hidden.dtype)
+        edited = hidden + token_mask.view(1, -1, 1) * (donor.unsqueeze(0) - current).unsqueeze(1)
+        self._applied_count += 1
+        return _replace_hidden_output(output, edited)
+
     def _hook(self, module: Any, inputs: Any, output: Any) -> Any:
         import torch
 
         hidden = output[0] if isinstance(output, tuple) else output
+
+        if self._mode == "patch_state":
+            return self._patch_state_hook(output, hidden)
 
         if torch.is_tensor(self._vector):
             vector = self._vector.to(device=hidden.device, dtype=hidden.dtype)
@@ -241,3 +294,12 @@ class ResidualStreamIntervention:
         if self._handle is not None:
             self._handle.remove()
         self._handle = None
+
+    @property
+    def applied_count(self) -> int:
+        """How many forward passes actually applied the intervention.
+
+        For ``patch_state`` this must equal 1 after a full generation (patched once
+        at prefill, skipped on every cached decode step). Callers should assert it.
+        """
+        return self._applied_count

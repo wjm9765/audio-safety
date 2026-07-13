@@ -91,3 +91,23 @@ attack_flip:
     #     - angry
   n_bootstrap: 2000
   ci_alpha: 0.05
+
+# Causal-attribution interchange-patching trace (new paper direction; Qwen2-Audio
+# only, direction-finding). Reuses the §8 judged manifest to find genuine PAP flips,
+# then tests whether a clean-run residual state injected at the attacked run's P2
+# restores refusal harmful-specifically beyond identity/wrong-item/displacement shams.
+# frozen_axis_artifact is passed on the CLI (no absolute path in config).
+causal_trace:
+  enabled: true
+  frozen_axis_artifact: null
+  clean_style: neutral
+  attack_style: jb_pap
+  primary_layer: 16                       # preregistered decision anchor (do not select from outcome)
+  primary_position: first_generation_prelogit
+  content_position: assistant_start_pre
+  exploratory_layers: []                  # optional sweep is EXPLORATORY, reported separately
+  max_flips: 40
+  n_benign: 30
+  max_new_tokens: 64
+  seed: 0
+  # judge_models: null -> reuse conversion_gap.judge.models

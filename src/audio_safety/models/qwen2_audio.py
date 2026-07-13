@@ -14,7 +14,7 @@ from urllib.parse import urlparse
 from urllib.request import urlopen
 
 from audio_safety.config.schema import ModelConfig
-from audio_safety.models.hooks import ResidualStreamIntervention
+from audio_safety.models.hooks import ResidualStreamCapture, ResidualStreamIntervention
 
 _DTYPES = {"bfloat16", "float16", "float32"}
 PositionName = str
@@ -402,6 +402,90 @@ def generate_audio_response_with_intervention(
         all_positions=all_positions,
     ):
         generate_ids = model.generate(**inputs, max_new_tokens=max_new_tokens)
+    generate_ids = generate_ids[:, prompt_len:]
+    return processor.batch_decode(
+        generate_ids,
+        skip_special_tokens=True,
+        clean_up_tokenization_spaces=False,
+    )[0]
+
+
+def capture_audio_state(
+    model: Any,
+    processor: Any,
+    audio_path: Path | str,
+    instruction: str,
+    *,
+    layer_idx: int,
+    position_name: str,
+    system_prompt: str = "You are a helpful assistant.",
+) -> Any:
+    """Capture one donor residual-stream state for interchange patching.
+
+    Returns the float32 CPU state (shape ``(d_model,)``) at ``layer_idx`` and the
+    role-relative ``position_name`` (resolved against THIS input's processor-
+    expanded token length). Used to snapshot a clean-run state that is later
+    injected into an attacked run at the same role-relative position.
+    """
+    import numpy as np
+    import torch
+
+    conversation = build_audio_analysis_conversation(
+        audio_path, instruction, system_prompt=system_prompt
+    )
+    token_index = resolve_audio_position_indices(processor, conversation)[position_name]
+    device = model_input_device(model)
+    inputs = prepare_qwen2_audio_inputs(processor, conversation, device=device)
+    with torch.no_grad(), ResidualStreamCapture(
+        model, token_index=token_index, layers=[layer_idx]
+    ) as cap:
+        model(**inputs)
+    state = cap.states()[layer_idx].numpy().astype(np.float32)
+    return state, int(token_index)
+
+
+def generate_audio_response_with_state_patch(
+    model: Any,
+    processor: Any,
+    audio_path: Path | str,
+    instruction: str,
+    *,
+    layer_idx: int,
+    position_name: str,
+    replacement_state: Any,
+    max_new_tokens: int = 128,
+    system_prompt: str = "You are a helpful assistant.",
+    require_single_application: bool = True,
+) -> str:
+    """Generate while replacing one residual state with a donor (interchange patch).
+
+    The donor ``replacement_state`` (a full d_model state captured from another run)
+    is injected at THIS input's resolved ``position_name`` on ``layer_idx`` during
+    prefill only. ``require_single_application`` asserts the patch fired exactly
+    once (the correctness guard from the design): a mismatch means the operator or
+    generation setup is wrong and the trace must be discarded.
+    """
+    conversation = build_audio_analysis_conversation(
+        audio_path, instruction, system_prompt=system_prompt
+    )
+    token_index = resolve_audio_position_indices(processor, conversation)[position_name]
+    device = model_input_device(model)
+    inputs = prepare_qwen2_audio_inputs(processor, conversation, device=device)
+    prompt_len = inputs.input_ids.shape[1]
+    intervention = ResidualStreamIntervention(
+        model,
+        layer_idx=layer_idx,
+        token_index=token_index,
+        mode="patch_state",
+        replacement_state=replacement_state,
+    )
+    with intervention:
+        generate_ids = model.generate(**inputs, max_new_tokens=max_new_tokens)
+    if require_single_application and intervention.applied_count != 1:
+        raise RuntimeError(
+            f"patch_state applied {intervention.applied_count} times, expected 1 "
+            f"(layer={layer_idx}, position={position_name}, resolved_index={token_index})"
+        )
     generate_ids = generate_ids[:, prompt_len:]
     return processor.batch_decode(
         generate_ids,

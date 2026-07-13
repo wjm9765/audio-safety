@@ -181,3 +181,84 @@ def test_missing_token_index_without_all_positions_raises():
     model = _TinyLayerModel()
     with pytest.raises(ValueError, match="token_index is required"):
         ResidualStreamIntervention(model, layer_idx=0, vector=np.zeros(2), mode="add")
+
+
+# --- patch_state (interchange / activation patching for causal tracing) ---------
+
+
+def test_patch_state_replaces_position_verbatim_without_normalizing():
+    model = _TinyLayerModel()
+    hidden = torch.zeros(1, 4, 2)
+    donor = np.array([3.0, -5.0], dtype=np.float32)  # non-unit; must NOT be normalized
+
+    with ResidualStreamIntervention(
+        model, layer_idx=0, token_index=2, mode="patch_state", replacement_state=donor
+    ):
+        edited = model(hidden)
+
+    # The donor is injected verbatim (a directional edit would have unit-normalized it).
+    assert torch.allclose(edited[0, 2], torch.tensor([3.0, -5.0]))
+    assert torch.allclose(edited[0, 0], torch.tensor([0.0, 0.0]))
+    assert torch.allclose(edited[0, 3], torch.tensor([0.0, 0.0]))
+
+
+def test_patch_state_identity_is_invariant():
+    model = _TinyLayerModel()
+    hidden = torch.tensor([[[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]])
+    donor = hidden[0, 1, :].numpy()  # patch a position with its own current value
+
+    with ResidualStreamIntervention(
+        model, layer_idx=0, token_index=1, mode="patch_state", replacement_state=donor
+    ):
+        edited = model(hidden)
+
+    assert torch.allclose(edited, hidden)
+
+
+def test_patch_state_applies_exactly_once_across_prefill_and_decode():
+    # Prefill (T=5) patches the absolute index; each length-1 cached decode step is
+    # out of range and must be skipped, so the donor is injected exactly once.
+    model = _TinyLayerModel()
+    intervention = ResidualStreamIntervention(
+        model, layer_idx=0, token_index=3, mode="patch_state",
+        replacement_state=np.ones(2, dtype=np.float32),
+    )
+    with intervention:
+        model(torch.zeros(1, 5, 2))
+        model(torch.zeros(1, 1, 2))
+        model(torch.zeros(1, 1, 2))
+
+    assert intervention.applied_count == 1
+
+
+def test_patch_state_rejects_negative_index():
+    model = _TinyLayerModel()
+    with pytest.raises(ValueError, match="non-negative absolute token_index"):
+        ResidualStreamIntervention(
+            model, layer_idx=0, token_index=-1, mode="patch_state",
+            replacement_state=np.zeros(2),
+        )
+
+
+def test_patch_state_requires_replacement_state():
+    model = _TinyLayerModel()
+    with pytest.raises(ValueError, match="requires replacement_state"):
+        ResidualStreamIntervention(model, layer_idx=0, token_index=0, mode="patch_state")
+
+
+def test_patch_state_rejects_all_positions():
+    model = _TinyLayerModel()
+    with pytest.raises(ValueError, match="does not support all_positions"):
+        ResidualStreamIntervention(
+            model, layer_idx=0, token_index=0, mode="patch_state",
+            replacement_state=np.zeros(2), all_positions=True,
+        )
+
+
+def test_patch_state_dim_mismatch_raises_at_forward():
+    model = _TinyLayerModel()
+    with ResidualStreamIntervention(
+        model, layer_idx=0, token_index=0, mode="patch_state",
+        replacement_state=np.zeros(3),
+    ), pytest.raises(ValueError, match="!= hidden dim"):
+        model(torch.zeros(1, 2, 2))

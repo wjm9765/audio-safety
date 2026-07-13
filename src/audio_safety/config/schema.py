@@ -454,6 +454,40 @@ class AttackFlipConfig(StrictModel):
     report_markdown_file: Path = Path("attack_flip_report.md")
 
 
+class CausalTraceConfig(StrictModel):
+    """Run 4 causal-attribution: interchange-patching trace (direction-finding).
+
+    Reuses the §8 judged manifest to find genuine PAP flips, then causally tests
+    whether a clean-run residual state, injected at a role-relative site of the
+    attacked run, restores refusal harmful-specifically beyond shams. Qwen2-Audio
+    only; not a §0 gate. See run4_causal_attribution design doc.
+    """
+
+    enabled: bool = False
+    # Frozen r_A axis (Run 3 rdo_axis.npz) — used ONLY for the r_a_coord concept
+    # control at its trained site (layer 16 / P2); never at other sites.
+    frozen_axis_artifact: Path | None = None
+    clean_style: str = "neutral"
+    attack_style: str = "jb_pap"
+    # Preregistered primary cell (decision anchor). Do not select the primary layer
+    # from the trace outcome; any layer sweep is exploratory.
+    primary_layer: int = 16
+    primary_position: str = "first_generation_prelogit"
+    content_position: str = "assistant_start_pre"
+    exploratory_layers: list[int] = Field(default_factory=list)
+    max_flips: int = 40
+    n_benign: int = 30
+    max_new_tokens: int = 64
+    seed: int = 0
+    # None reuses the §8 judge (conversion_gap.judge.models) so one judge config
+    # judges both the flip discovery and the patched traces.
+    judge_models: list[str] | None = None
+    records_file: Path = Path("causal_trace_records.jsonl")
+    judged_file: Path = Path("causal_trace_judged.jsonl")
+    report_file: Path = Path("causal_trace_report.json")
+    report_markdown_file: Path = Path("causal_trace_report.md")
+
+
 class ExperimentConfig(StrictModel):
     name: str
     seed: int = 0
@@ -475,6 +509,9 @@ class ExperimentConfig(StrictModel):
 
     # Run 4 §8 attack-induced-flip analysis. Optional/off by default.
     attack_flip: AttackFlipConfig | None = None
+
+    # Run 4 causal-attribution interchange-patching trace. Optional/off by default.
+    causal_trace: CausalTraceConfig | None = None
 
     # Legacy cone-drift fields remain optional so old analysis helpers can still be
     # imported while exp1 moves to the Audio-RDO gate.
