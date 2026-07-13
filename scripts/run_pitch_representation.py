@@ -71,9 +71,17 @@ def main() -> None:
 
         metrics = analyze_pitch_artifacts(cfg, run_dir, seed=cfg.seed)
         print(
-            f"[pitch] outcome={metrics['screening_outcome']} -> "
+            f"[pitch] outcome={metrics['screening_outcome']} "
+            f"verified_flips={metrics['n_verified_flips']} "
+            f"pending_review={metrics['n_pending_review']} -> "
             f"{run_dir / cfg.pitch_representation.report_file}"
         )
+        if metrics["screening_outcome"] == "UNVERIFIED":
+            print(
+                "[pitch] UNVERIFIED: heuristic flip candidates await an agent/human "
+                "judge. Write reviewed_behavior_label into cells.jsonl and re-run "
+                "--phase analyze."
+            )
 
 
 if __name__ == "__main__":

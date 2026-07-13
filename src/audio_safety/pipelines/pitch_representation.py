@@ -105,7 +105,7 @@ def _variant_audio(
     gate: PitchRepresentationConfig,
     run_dir: Path,
 ) -> tuple[Path, str | None]:
-    if pitch == 0.0:
+    if pitch == 0.0 and not gate.roundtrip_neutral:
         return source, None
     relative = gate.variants_dir / safety_label / _pitch_tag(pitch) / f"{item_id}.wav"
     target = run_dir / relative
@@ -232,6 +232,13 @@ def _generation_indices(
 
     for group in grouped.values():
         ordered = sorted(group, key=lambda cell: float(cell["pitch_semitones"]))
+        if gate.generate_all_response_pitches:
+            # Full pitch coverage: never let the crude first-token margin proxy
+            # decide which cells get a behavioral response, so an interior flip
+            # cannot be missed for lack of a generated output.
+            for cell in ordered:
+                selected.add(int(cell["activation_index"]))
+            continue
         neutral = next(
             (cell for cell in ordered if float(cell["pitch_semitones"]) == 0.0),
             None,
@@ -331,7 +338,8 @@ def extract_pitch_representation(
     cells_path = run_dir / gate.cells_file
     if not gate.overwrite and (activation_path.exists() or cells_path.exists()):
         raise FileExistsError(
-            f"pitch artifacts already exist under {run_dir}; set pitch_representation.overwrite=true"
+            f"pitch artifacts already exist under {run_dir}; "
+            "set pitch_representation.overwrite=true"
         )
 
     records = load_jsonl(_manifest_path(cfg, gate, data_dir))

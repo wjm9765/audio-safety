@@ -198,3 +198,29 @@ considered only if this simple shared-SVD model leaves a clear, reproducible res
 - layer × site heatmaps and per-item pitch trajectories;
 - a short conclusion stating `PROCEED`, `PARTIAL`, or `STOP/REFRAME` without upgrading it to the final
   paper claim.
+
+### Implementation update (2026-07-14) — verdict hardening after code review
+
+A code review of the first implementation found the auto-verdict could be driven by the regex
+behavior labeller, which marks any non-refusal harmful-prompt output `harmful_compliance`; two genuine
+refusals that merely reword under a pitch shift could then be counted as a jailbreak flip and produce a
+false `PROCEED`. The screening logic was changed accordingly (this refines the exploratory conventions
+above; it does not touch `design.md` §0):
+
+- **Behavioral flips are agent/human-verified, not regex-driven.** A flip counts toward the phenomenon
+  signal only when `reviewed_behavior_label` confirms the neutral-refusal→pitch-compliance transition
+  (`require_reviewed_labels: true`). The regex heuristic is retained only as a triage hint. When
+  candidates exist but none are reviewed, the outcome is `UNVERIFIED` (fail closed), never `PROCEED`.
+  The intended loop is: extract → an agent judges the saved responses into `reviewed_behavior_label` →
+  re-run `--phase analyze`.
+- **Full pitch generation for the phenomenon search** (`generate_all_response_pitches: true`): every
+  pitch of a harmful item gets a full response, so a real flip at an interior pitch is not missed for
+  lack of a generated output gated on the crude first-token margin proxy.
+- **Neutral round-trip** (`roundtrip_neutral: true`): the 0 st waveform passes through the same STFT
+  pitch-shift as the shifted variants so `p=0` and `p≠0` share the vocoder artifact.
+
+Known limitation left for the paper build (not fixed here): the difference-of-means harmfulness and
+refusal readouts are trained on correlated labels (harmful↔refuse), so each direction is partly
+contaminated by the other; on flip cells this can suppress the dissociation signal. Interpret a high
+harmfulness AUROC and the dissociation flag with that caveat, and orthogonalise the probes before any
+paper-facing claim.
