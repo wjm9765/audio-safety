@@ -1,11 +1,73 @@
 # Audio-RDO Gate Context
 
-Last updated: 2026-07-12
+Last updated: 2026-07-14
 
 This file preserves the working context behind the current experiment rewrite. The
 folder name remains `exp1_refusal_cone_drift` for repository continuity, but the
 completed first phase was the **Audio-RDO Refusal Axis Existence Gate** and the
-active next design is the Run 4 conversion/writer test audited below.
+active next design is the Run 7 COAST-R exploratory causal-transport test recorded
+below. Earlier Run 4/5/6 decisions are retained as history.
+
+## Active handoff — Run 7 COAST-R Stage A (2026-07-14)
+
+The human scope decision after Run 6 is now the operative constraint. The observed
+transform must be called the **compound librosa phase-vocoder operator**, not a clean
+pitch/F0 intervention. Its value is that one small, nominally content-preserving audio
+edit easily moved refusal-related behavior and state. The project will therefore not
+spend another gating run isolating F0, formants, or phase. The next question is whether
+the already observed displacement contains more than one causally useful,
+operator-reachable refusal-transport component and whether the method later transfers
+across audio transforms. The 2026 preprints are permitted to inform roughly half of
+the method; novelty does not require an unrelated direction, but our claim must remain
+the narrower local causal-transport claim.
+
+The frozen method note is
+[run7_multidimensional_audio_refusal_method_20260714.md](./run7_multidimensional_audio_refusal_method_20260714.md).
+Stage A is implemented as a config-driven `score -> fit -> intervene` workflow:
+
+- `score`: GPU teacher-forcing over refusal/compliance continuation banks, with every
+  target token scored from the preceding logit. This replaces the old single-token
+  proxy as the primary endpoint while preserving that proxy as an explicit baseline.
+- `fit`: CPU-only, item-grouped cross-fitting. A behavior-label-free uncentered basis
+  `B` captures reachable compound-operator deltas; reduced-rank ridge learns nested
+  behavior-associated components `U` inside `B`; a separate DIM direction `R` is
+  descriptive; and `f_train(neutral state, operator severity)` predicts natural `B`
+  coordinates without reading the transformed test activation or any safety target.
+- `intervene`: GPU, greedy, exact-magnitude residual additions at L18/P2 **once during
+  prefill**. It evaluates same-pair reconstruction/restoration separately from the
+  primary out-of-pair prediction. This is not the older all-token intervention.
+
+This implementation is the executable **core**, not every comparison in the full
+method note. It freezes source hashes, official-template P2 alignment, item-grouped
+outer folds, disjoint `B/R/U/f` fit roles, and judge-ready long-form causal rows. The
+matched reachable-null ensemble, legacy `r_A`/RDO-cone comparison, item bootstrap/
+permutation inference, alternative chat-template condition, and causal outcome
+aggregation remain explicit follow-up work. They must be completed before a
+multidimensional paper claim; the current fit may only emit a geometry candidate with
+the causal gate marked pending.
+
+The source remains the fully exposed Run 6 cohort
+`run5_20260714_0308_pitch_n150`; every split is exploratory cross-fitting, never a new
+confirmatory test set. Existing waveform files are reused, so no TTS or new F0 run is
+required. Local checkout does not contain the ignored ~3 GB activation/wav artifacts;
+actual `score` and `intervene` execution therefore belongs on the GPU workspace. Until
+those phases and blinded full-response judgments are complete, there is **no Run 7
+result and no multidimensionality claim**. Consequently `results.md` must not receive a
+Run 7 entry yet.
+
+Canonical commands (use one shared run name across phases):
+
+```bash
+./scripts/run_coast_r_stage_a.py --config configs/experiments/run7_coast_r_stage_a.yaml --run-name <run7_name> --phase score
+./scripts/run_coast_r_stage_a.py --config configs/experiments/run7_coast_r_stage_a.yaml --run-name <run7_name> --phase fit
+./scripts/run_coast_r_stage_a.py --config configs/experiments/run7_coast_r_stage_a.yaml --run-name <run7_name> --phase intervene
+```
+
+After Stage A, the next recorded decision is: proceed to a preregistered, genuinely new
+multi-transform cohort only if the continuation-curve and causal ladder show useful
+incremental rank and the label-free predictor passes its validation gate. A rank-1 or
+null result is an allowed conclusion; it is not permission to search post hoc over
+layers, ranks, token positions, or templates.
 
 ## Current State (updated 2026-07-13)
 

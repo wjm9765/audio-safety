@@ -1,11 +1,12 @@
 from audio_safety.config.loader import load_experiment_config
 from audio_safety.config.schema import (
+    AsrConfig,
+    AudioRdoConfig,
     AudioRdoDatasetConfig,
     AudioRdoDecisionConfig,
-    AudioRdoConfig,
-    AsrConfig,
     BaselineConfig,
     BehaviorConfig,
+    CoastRConfig,
     ConeConfig,
     DataSplitConfig,
     DecisionConfig,
@@ -20,8 +21,8 @@ from audio_safety.config.schema import (
     RdoLossWeightsConfig,
     StatsConfig,
     TargetGenerationConfig,
-    TtsConfig,
     TranscriptControlConfig,
+    TtsConfig,
 )
 
 __all__ = [
@@ -31,6 +32,7 @@ __all__ = [
     "AsrConfig",
     "BaselineConfig",
     "BehaviorConfig",
+    "CoastRConfig",
     "ConeConfig",
     "DataSplitConfig",
     "DecisionConfig",

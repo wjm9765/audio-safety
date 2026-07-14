@@ -201,3 +201,39 @@ uv pip install pyworld "setuptools<80"
 Env for GPU stages: `HF_HUB_CACHE=/workspace/audio_safety_data/cache HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
 PYTORCH_ALLOC_CONF=expandable_segments:True`. All scripts are `#!/usr/bin/env -S uv run python`, read-only w.r.t.
 model weights, and resumable (each writes its own `pitch_representation/*.jsonl|json`).
+
+## Human evaluation and scope decision — 2026-07-14 (append-only)
+
+> This is a human research-priority decision. It does not overwrite the artifact-control results above or
+> upgrade a working interpretation into an established multi-transform claim.
+
+The human evaluator agrees with the agents' narrow empirical reading that the `librosa` phase-vocoder
+operator introduces a compound DSP displacement/artifact pattern, rather than an isolated F0 change, and that
+the model's refusal-related state appears easier to perturb under that operator than its harmfulness readout.
+This does not identify generic noise, phase incoherence, or any other single artifact as the exact cause.
+However, the human does **not** consider further F0-specific isolation to be the load-bearing next step. The
+scientific target is broader than pitch: audio makes it easy to introduce small, nominally
+content-preserving changes of many kinds, and the important question is whether such changes can repeatedly
+move the safety decision across a fragile refusal boundary.
+
+The working human interpretation is therefore:
+
+1. the project has partial evidence for a manipulable refusal-related direction/component — the Exp1
+   `r_A` gate was `WEAK-GO`, and the Run 6 L18 refusal-related component made a causal contribution beyond
+   one matched orthogonal control. These directions were constructed differently, so this is not yet evidence
+   for one universal axis shared across experiments;
+2. the `librosa` result is valuable as one concrete instance of small audio-processing changes destabilizing
+   refusal, even though it must not be described as a clean F0/pitch effect;
+3. the next study should test **cross-transform refusal fragility**, not continue optimizing the attribution
+   of this one effect to F0, formants, or phase as the central research question; and
+4. exact operator definitions and content/intelligibility controls remain mandatory. A certificate or
+   robustness statement is still valid only for its declared transform set, even when the paper-level claim
+   concerns a broader family of small audio changes.
+
+Accordingly, additional F0-only experiments and the phase-scramble attribution test are **deprioritized as
+paper-gating tasks**. They may still be useful as supporting controls, but failure to run them does not block
+the broader direction. The new priority is a full-cohort, multi-transform study with matched perturbation
+budgets, harmful/benign controls, full-response judgments, refusal-margin trajectories, and causal tests of
+the refusal-related representation. Because the current strongest behavioral evidence comes from one
+`librosa` operator on one model, the general statement that "small audio changes of any kind destabilize
+refusal" remains a hypothesis until it replicates across transform families and models.

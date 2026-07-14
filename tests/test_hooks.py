@@ -82,6 +82,32 @@ def test_all_positions_add_edits_every_position():
         assert torch.allclose(edited[0, pos], torch.tensor([2.0, 0.0]))
 
 
+def test_raw_add_preserves_delta_norm_and_applies_only_once_during_prefill():
+    """COAST-R exact deltas must not be unit-normalized or replayed on decode."""
+    model = _TinyLayerModel()
+    delta = np.array([3.0, 4.0], dtype=np.float32)
+    intervention = ResidualStreamIntervention(
+        model,
+        layer_idx=0,
+        token_index=2,
+        vector=delta,
+        mode="add",
+        normalize_vector=False,
+    )
+
+    with intervention:
+        prefill = model(torch.zeros(1, 4, 2))
+        decode = model(torch.zeros(1, 1, 2))
+
+    assert torch.allclose(prefill[0, 2], torch.tensor([3.0, 4.0]))
+    assert torch.linalg.vector_norm(prefill[0, 2]).item() == pytest.approx(5.0)
+    assert torch.count_nonzero(prefill[0, :2]).item() == 0
+    assert torch.count_nonzero(prefill[0, 3]).item() == 0
+    # Absolute P2 index 2 is out of range for a length-one cached decode step.
+    assert torch.count_nonzero(decode).item() == 0
+    assert intervention.applied_count == 1
+
+
 def test_all_positions_edits_length_one_decode_step():
     # Simulates a KV-cached decode step where the forward pass sees a single new
     # token. The legacy single-position hook is a no-op here; all_positions must
@@ -166,13 +192,16 @@ def test_all_positions_set_coordinate_rejects_per_row_target():
     hidden = torch.zeros(1, 3, 2)
     vector = np.array([1.0, 0.0], dtype=np.float32)
 
-    with pytest.raises(ValueError, match="scalar or match batch size"), ResidualStreamIntervention(
-        model,
-        layer_idx=0,
-        vector=vector,
-        mode="set_coordinate",
-        target_coordinate=np.array([1.0, 2.0], dtype=np.float32),
-        all_positions=True,
+    with (
+        pytest.raises(ValueError, match="scalar or match batch size"),
+        ResidualStreamIntervention(
+            model,
+            layer_idx=0,
+            vector=vector,
+            mode="set_coordinate",
+            target_coordinate=np.array([1.0, 2.0], dtype=np.float32),
+            all_positions=True,
+        ),
     ):
         model(hidden)
 
@@ -220,7 +249,10 @@ def test_patch_state_applies_exactly_once_across_prefill_and_decode():
     # out of range and must be skipped, so the donor is injected exactly once.
     model = _TinyLayerModel()
     intervention = ResidualStreamIntervention(
-        model, layer_idx=0, token_index=3, mode="patch_state",
+        model,
+        layer_idx=0,
+        token_index=3,
+        mode="patch_state",
         replacement_state=np.ones(2, dtype=np.float32),
     )
     with intervention:
@@ -235,7 +267,10 @@ def test_patch_state_rejects_negative_index():
     model = _TinyLayerModel()
     with pytest.raises(ValueError, match="non-negative absolute token_index"):
         ResidualStreamIntervention(
-            model, layer_idx=0, token_index=-1, mode="patch_state",
+            model,
+            layer_idx=0,
+            token_index=-1,
+            mode="patch_state",
             replacement_state=np.zeros(2),
         )
 
@@ -250,15 +285,25 @@ def test_patch_state_rejects_all_positions():
     model = _TinyLayerModel()
     with pytest.raises(ValueError, match="does not support all_positions"):
         ResidualStreamIntervention(
-            model, layer_idx=0, token_index=0, mode="patch_state",
-            replacement_state=np.zeros(2), all_positions=True,
+            model,
+            layer_idx=0,
+            token_index=0,
+            mode="patch_state",
+            replacement_state=np.zeros(2),
+            all_positions=True,
         )
 
 
 def test_patch_state_dim_mismatch_raises_at_forward():
     model = _TinyLayerModel()
-    with ResidualStreamIntervention(
-        model, layer_idx=0, token_index=0, mode="patch_state",
-        replacement_state=np.zeros(3),
-    ), pytest.raises(ValueError, match="!= hidden dim"):
+    with (
+        ResidualStreamIntervention(
+            model,
+            layer_idx=0,
+            token_index=0,
+            mode="patch_state",
+            replacement_state=np.zeros(3),
+        ),
+        pytest.raises(ValueError, match="!= hidden dim"),
+    ):
         model(torch.zeros(1, 2, 2))

@@ -8,6 +8,7 @@ from audio_safety.config import load_experiment_config
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXP1 = REPO_ROOT / "configs" / "experiments" / "exp1_refusal_cone_drift.yaml"
 EXP1_FAST = REPO_ROOT / "configs" / "experiments" / "exp1_refusal_cone_drift_fast.yaml"
+RUN7_COAST_R = REPO_ROOT / "configs" / "experiments" / "run7_coast_r_stage_a.yaml"
 
 
 def test_exp1_config_loads():
@@ -48,6 +49,32 @@ def test_exp1_fast_config_loads():
     assert cfg.rdo.train_steps == 50
     assert cfg.rdo.limit_per_site == 10
     assert cfg.baselines.random_vectors == 4
+
+
+def test_run7_coast_r_config_loads_with_frozen_stage_a_contract():
+    cfg = load_experiment_config(RUN7_COAST_R)
+    coast = cfg.coast_r
+
+    assert cfg.name == "run7_coast_r_stage_a"
+    assert coast is not None and coast.enabled is True
+    assert coast.source_run_name == "run5_20260714_0308_pitch_n150"
+    assert coast.site == "llm_p2"
+    assert coast.primary_layer == 18
+    assert coast.sensitivity_layers == [16, 20]
+    assert coast.operator_family == "librosa_phase_vocoder_compound"
+    assert coast.operator_backend == "librosa"
+    assert coast.severity_field == "pitch_semitones"
+    assert coast.outer_folds == 5
+    assert coast.reachable_rank_candidates == [4, 8, 16, 32]
+    assert coast.reachable_rank_cap == 32
+    assert coast.transport_ranks == [1, 2, 3, 4]
+    assert coast.endpoint_kind == "continuation_curve"
+    assert coast.max_continuation_tokens == 32
+    assert len(coast.refusal_continuations) == 3
+    assert len(coast.compliance_continuations) == 3
+    assert coast.score_safety_labels == ["harmful", "benign"]
+    assert str(coast.fit_artifact_file) == "coast_r/fit_artifacts.npz"
+    assert coast.intervention_eligibility == "neutral_refusers"
 
 
 def test_preregistered_thresholds_match_design():

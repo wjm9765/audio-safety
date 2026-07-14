@@ -395,10 +395,13 @@ class ResidualStreamIntervention:
         target_coordinate: float | Any | None = None,
         replacement_state: Any | None = None,
         all_positions: bool = False,
+        normalize_vector: bool = True,
         eps: float = 1e-12,
     ):
         if mode not in {"add", "ablate", "set_coordinate", "patch_state"}:
             raise ValueError(f"unsupported intervention mode {mode!r}")
+        if not normalize_vector and mode != "add":
+            raise ValueError("normalize_vector=False is supported only for raw add mode")
         if mode == "patch_state":
             # Interchange patching: a donor full-state replacement at one absolute
             # prefill position. A negative token_index would resolve to position 0
@@ -409,9 +412,7 @@ class ResidualStreamIntervention:
             if all_positions:
                 raise ValueError("patch_state does not support all_positions")
             if token_index is None or token_index < 0:
-                raise ValueError(
-                    "patch_state requires a non-negative absolute token_index"
-                )
+                raise ValueError("patch_state requires a non-negative absolute token_index")
         else:
             if vector is None:
                 raise ValueError(f"{mode!r} mode requires a vector")
@@ -426,6 +427,7 @@ class ResidualStreamIntervention:
         self._target_coordinate = target_coordinate
         self._replacement_state = replacement_state
         self._all_positions = all_positions
+        self._normalize_vector = bool(normalize_vector)
         self._eps = eps
         self._applied_count = 0
         self._handle: Any | None = None
@@ -504,10 +506,14 @@ class ResidualStreamIntervention:
             vector = self._vector.to(device=hidden.device, dtype=hidden.dtype)
         else:
             vector = torch.as_tensor(self._vector, device=hidden.device, dtype=hidden.dtype)
-        vector = vector / torch.clamp(torch.linalg.vector_norm(vector), min=self._eps)
+        if self._normalize_vector:
+            vector = vector / torch.clamp(torch.linalg.vector_norm(vector), min=self._eps)
+        elif self._mode != "add":  # defensive: validated in __init__
+            raise RuntimeError("unnormalized non-add intervention reached the hook")
 
         if self._all_positions:
             edited = self._edit(hidden, vector)
+            self._applied_count += 1
             return _replace_hidden_output(output, edited)
 
         token_index = self._token_index
@@ -524,6 +530,7 @@ class ResidualStreamIntervention:
             num_classes=hidden.shape[1],
         ).to(dtype=hidden.dtype)
         edited = hidden + token_mask.view(1, -1, 1) * (replacement - current).unsqueeze(1)
+        self._applied_count += 1
         return _replace_hidden_output(output, edited)
 
     def __enter__(self) -> "ResidualStreamIntervention":
@@ -539,7 +546,8 @@ class ResidualStreamIntervention:
     def applied_count(self) -> int:
         """How many forward passes actually applied the intervention.
 
-        For ``patch_state`` this must equal 1 after a full generation (patched once
-        at prefill, skipped on every cached decode step). Callers should assert it.
+        For single-position ``patch_state`` and raw-delta generation this must equal
+        1 after a full generation (edited once at prefill, skipped on every cached
+        decode step). Callers should assert it.
         """
         return self._applied_count

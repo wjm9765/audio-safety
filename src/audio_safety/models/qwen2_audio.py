@@ -214,6 +214,10 @@ def prepare_qwen2_audio_teacher_forced_inputs(
         padding=True,
     )
     prompt_len = prompt_inputs.input_ids.shape[1]
+    if full_inputs.input_ids.shape[1] <= prompt_len:
+        raise ValueError("teacher-forced target produced no target tokens")
+    if not (full_inputs.input_ids[:, :prompt_len] == prompt_inputs.input_ids).all():
+        raise ValueError("prompt token ids changed when the teacher-forced target was appended")
     labels = full_inputs.input_ids.clone()
     labels[:, :prompt_len] = ignore_index
     if device is not None:
@@ -332,9 +336,7 @@ def generate_audio_response(
     device = model_input_device(model)
     inputs = prepare_qwen2_audio_inputs(processor, conversation, device=device)
     prompt_len = inputs.input_ids.shape[1]
-    generate_ids = model.generate(
-        **inputs, max_new_tokens=max_new_tokens, do_sample=do_sample
-    )
+    generate_ids = model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=do_sample)
     generate_ids = generate_ids[:, prompt_len:]
     return processor.batch_decode(
         generate_ids,
@@ -384,6 +386,7 @@ def generate_audio_response_with_intervention(
     scale: float = 1.0,
     target_coordinate: float | Any | None = None,
     all_positions: bool = False,
+    normalize_vector: bool = True,
     max_new_tokens: int = 128,
     system_prompt: str = "You are a helpful assistant.",
     do_sample: bool = True,
@@ -410,16 +413,93 @@ def generate_audio_response_with_intervention(
         scale=scale,
         target_coordinate=target_coordinate,
         all_positions=all_positions,
+        normalize_vector=normalize_vector,
     ):
-        generate_ids = model.generate(
-            **inputs, max_new_tokens=max_new_tokens, do_sample=do_sample
-        )
+        generate_ids = model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=do_sample)
     generate_ids = generate_ids[:, prompt_len:]
     return processor.batch_decode(
         generate_ids,
         skip_special_tokens=True,
         clean_up_tokenization_spaces=False,
     )[0]
+
+
+def score_audio_continuation(
+    model: Any,
+    processor: Any,
+    audio_path: Path | str,
+    instruction: str,
+    target: str,
+    *,
+    max_tokens: int = 32,
+    system_prompt: str = "You are a helpful assistant.",
+) -> list[float]:
+    """Teacher-force one continuation and return correctly shifted token log-probs."""
+    import torch
+
+    conversation = build_audio_analysis_conversation(
+        audio_path, instruction, system_prompt=system_prompt
+    )
+    device = model_input_device(model)
+    inputs, labels, prompt_len = prepare_qwen2_audio_teacher_forced_inputs(
+        processor, conversation, target, device=device
+    )
+    with torch.inference_mode():
+        logits = model(**inputs, use_cache=False, return_dict=True).logits[0].float()
+    target_positions = labels[0].ne(-100).nonzero(as_tuple=False).flatten()
+    if len(target_positions) == 0 or int(target_positions[0]) != prompt_len:
+        raise RuntimeError("teacher-forced labels are not a contiguous target suffix")
+    target_positions = target_positions[:max_tokens]
+    predicting = logits.index_select(0, target_positions - 1)
+    target_ids = inputs.input_ids[0].index_select(0, target_positions)
+    log_probs = torch.log_softmax(predicting, dim=-1)
+    selected = log_probs.gather(1, target_ids.unsqueeze(1)).squeeze(1)
+    return selected.detach().cpu().tolist()
+
+
+def generate_audio_response_with_raw_delta(
+    model: Any,
+    processor: Any,
+    audio_path: Path | str,
+    instruction: str,
+    *,
+    layer_idx: int,
+    position_name: str,
+    delta: Any,
+    max_new_tokens: int = 128,
+    system_prompt: str = "You are a helpful assistant.",
+) -> tuple[str, int]:
+    """Add an exact residual delta once at P2 during prefill and generate greedily."""
+    conversation = build_audio_analysis_conversation(
+        audio_path, instruction, system_prompt=system_prompt
+    )
+    token_index = resolve_audio_position_indices(processor, conversation)[position_name]
+    device = model_input_device(model)
+    inputs = prepare_qwen2_audio_inputs(processor, conversation, device=device)
+    prompt_len = inputs.input_ids.shape[1]
+    intervention = ResidualStreamIntervention(
+        model,
+        layer_idx=layer_idx,
+        token_index=token_index,
+        vector=delta,
+        mode="add",
+        scale=1.0,
+        all_positions=False,
+        normalize_vector=False,
+    )
+    with intervention:
+        generate_ids = model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
+    if intervention.applied_count != 1:
+        raise RuntimeError(
+            f"raw P2 delta applied {intervention.applied_count} times, expected exactly 1"
+        )
+    generate_ids = generate_ids[:, prompt_len:]
+    output = processor.batch_decode(
+        generate_ids,
+        skip_special_tokens=True,
+        clean_up_tokenization_spaces=False,
+    )[0]
+    return output, intervention.applied_count
 
 
 def capture_audio_state(
@@ -448,9 +528,10 @@ def capture_audio_state(
     token_index = resolve_audio_position_indices(processor, conversation)[position_name]
     device = model_input_device(model)
     inputs = prepare_qwen2_audio_inputs(processor, conversation, device=device)
-    with torch.no_grad(), ResidualStreamCapture(
-        model, token_index=token_index, layers=[layer_idx]
-    ) as cap:
+    with (
+        torch.no_grad(),
+        ResidualStreamCapture(model, token_index=token_index, layers=[layer_idx]) as cap,
+    ):
         model(**inputs)
     state = cap.states()[layer_idx].numpy().astype(np.float32)
     return state, int(token_index)
@@ -493,9 +574,7 @@ def generate_audio_response_with_state_patch(
         replacement_state=replacement_state,
     )
     with intervention:
-        generate_ids = model.generate(
-            **inputs, max_new_tokens=max_new_tokens, do_sample=do_sample
-        )
+        generate_ids = model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=do_sample)
     if require_single_application and intervention.applied_count != 1:
         raise RuntimeError(
             f"patch_state applied {intervention.applied_count} times, expected 1 "
