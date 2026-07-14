@@ -513,6 +513,73 @@ heldout (n=60): glm RD **+5.0pp** (CI −5.0..+15.0, p 0.254), laguna **+3.3pp**
   attack/model/site for the gate; family-mean (not rank-k) correction tested. "Neighborhood closed" is a
   cumulative-dossier judgment, not carried by this 13-flip gate alone.
 
+### run7_20260714_phase_frontend — 2026-07-14 (phase-vocoder frontend distortion vs LALM refusal)
+
+- **Direction/pre-reg:** `run7_phase_frontend_distortion_direction_20260714.md` (dated confirmatory
+  amendment; does NOT edit design.md §0). Dual-agent designed (Codex gpt-5.6-sol ×2 web-grounded + Claude);
+  PI directive: "same audio slightly perturbed flips the attack; cause internally analyzable; NOT pitch".
+- **Setup:** Qwen2-Audio-7B, L18, first-token refusal margin + 2-judge label. 91 neutral refusers × p∈{−3,+3}.
+  Conditions: neutral / pv_standard (librosa-equiv independent-bin phase) / pv_locked (identity phase-locking,
+  same magnitude·timing·resample·gain·length) / phase_transplant / mel_matched_ctrl (pv_locked + zero-phase
+  EQ, processor log-mel RMS matched to D_pair). Reproduction valid: pv_standard 13/91 flips at ±3 vs run5
+  real-librosa 11/91 (waveform relL2 2.5e-3); pv_lambda holds PV output magnitude fixed across α to ~1e-7.
+- **Headline (representation/margin/causal-primary; behavioral gates reported as MISSES):**
+  Phase-vocoder incoherence — holding transcript, F0, spectral envelope, magnitude-processing path and
+  decoding fixed — **selectively displaces the L18 refusal representation**: pv_standard −2.81 vs an
+  equal-input-mel-distance coherent control +0.13 (robust to decoding-failure exclusion, −2.42 vs +0.02;
+  per-cell flip median −3.65 vs −0.02). Displacement predicts margin erosion (item-clustered Spearman
+  −0.573, p=3e-9); **restoring the frozen L18 refusal-axis component causally recovers refusal**
+  (restore−orth ΔM +1.74 [95% CI +0.49,+3.07], beats 30-dir orthogonal null, survives leave-two-out; 60%
+  behavioral flip-back). **Double dissociation:** restoration reverses pv_standard flips (+2.14) but NOT
+  mel_ctrl flips (+0.13). **Dose-response (decisive):** α∈{0..1} on the SAME pitched magnitude →
+  refusal-axis displacement (Spearman −0.579 [90% −0.67,−0.48], 84% items correct sign) and margin erosion
+  (Spearman +0.359) rise monotonically; flip 2.7%→7.7%; decoding-failure 18%→28% (two effects: refusal
+  erosion + generic disruption).
+- **Pre-registered gate outcome:** G1 necessity MISS (McNemar p=0.092, +7.7pp < +15pp bar; decode-matched
+  +4.2pp); G2 sufficiency MISS (transplant F0-leaky); G3 PARTIAL (D_pair>0; scalar not predictive, direction
+  is); **G4 flip-specificity MISS, reframed as a causal double dissociation; G5 causal PASS.** Verdict:
+  **PROCEED as a supporting mechanistic section** (NOT standalone).
+- **Reviewer scores (PI ≥7 gate — MET):** Codex gpt-5.6-sol **7.0/10** ("ship as-is as the supporting
+  mechanistic section; do NOT pivot"; up from 5.0 pre-dose). Independent adversarial ICLR reviewer **7/10
+  as the supporting section** (standalone 5.5; up from 4.0; reproduced every number independently). Both
+  ≥7 as the supporting mechanistic section of the certified-margin paper. Cross-checks:
+  `outputs/codex_{phase_design,userfeedback,interpret,rescore}_out.md`; analysis
+  `outputs/run7_20260714_phase_frontend/analysis.md`.
+- **Binding framing caveat (both reviewers):** state the mechanism at the representation/margin level only;
+  the axis is **contributory, not exclusive**; the behavioral flip is NOT shown to be refusal-specific (G4
+  miss; flip and decoding-failure co-move with α). To reach standalone/8+ (identification + generality, not
+  just power): a rough non-smooth coherent control, a matched high-leverage non-refusal steering control, a
+  2nd model, and the ±1/±2/±4 power render (a ±2 attempt was killed mid-run, no cells written — the power
+  boost remains a pending step; G1 stays McNemar p=0.092 at ±3). Role: mechanistic complement to the
+  greenlit black-box Certified Acoustic Safety Margin spine (run5) — explains WHY the certified brittle tail
+  exists and indicts benchmark practice ("semantic preservation ≠ acoustic construct validity").
+
+### run8_emotion_probe — 2026-07-14 (emotion-attack probe: does emotion load an independent refusal axis?)
+
+- **Direction/context:** `session_20260714_phase_and_multidim.md` §3. Tests the PI hypothesis "different
+  audio attacks (emotion/phase/pitch) hit different refusal cone axes → combined attacks easier" (from
+  Wollschläger concept cones). Codex correction: multidimensional geometry ≠ natural attacks partition across
+  it; preregistered 0.80/0.90 decision rule; prior ~75% funnel.
+- **Setup:** 91 harmful refusers + 91 matched benign × {neutral, sad, fearful, angry}, CosyVoice2 instruct2,
+  fixed base voice (728 renders); extract L18 (same endpoint as run7); project (style−neutral) displacement
+  into frozen 5-D refusal subspace; cosine to phase/pitch DSP axis; split-half stability; benign control.
+  Scripts `scripts/emotion_{extract,analyze}.py`.
+- **Result — emotion does NOT attack Qwen2-Audio:** behavioral refusal 78.0/78.0/80.2/79.1% for
+  neutral/sad/fearful/angry (identical); mean margin +1.84/+2.08/+1.71/+2.12 (no erosion); refusal-axis cosine
+  to DSP axis −0.76/−0.45/−0.78 (NEGATIVE, i.e. not toward compliance) but split-half stability 0.65/0.39/0.73
+  (all < 0.80 gate); margin erosion −0.24/+0.13/−0.27 (≈0). Content WER identical across styles.
+- **Verdict:** `AMBIGUOUS` = **ineffective manipulation** — emotion is not an effective content-preserving
+  attack on this model, so it cannot adjudicate funnel-vs-independent-axis. Consistent with LISTEN (2026):
+  LALMs underuse acoustic emotion vs lexical content; the model refuses on content, which emotion preserves.
+  Caveat: emotion intensity not classifier-verified, but 0-effect + literature indicate a genuine model
+  property. **The PI's attack-specific-axis hypothesis is NOT supported**: phase & pitch already funnel to the
+  same axis (cos 0.996); emotion is not even an effective attack. Decision: keep the run7 phase causal result
+  as the anchor; the multidimensional angle survives only as the "collapse to a shared low-dim bottleneck"
+  observation (see `session_20260714_phase_and_multidim.md` §2/§4).
+- **Cross-check:** blind Codex `gpt-5.6-sol` on the multidim methodology
+  (`outputs/cross_checks/20260714_multidim_methodology.md`): naive SVD not ICLR-caliber; attack is ~1-D within
+  refusal space (PR 1.49, corrected); right critique is "projection ≠ causal mediation," not "rank-1 vs rank-k."
+
 <!-- ENTRY TEMPLATE:
 
 ### <run_name> — YYYY-MM-DD
