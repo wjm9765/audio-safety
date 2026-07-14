@@ -35,6 +35,10 @@ gpu = [
     "datasets>=2.20",
     "librosa>=0.10",
     "numba>=0.61",
+    # Formant-preserving / factorial artifact controls (Run 6 pitch DSP-confound audit).
+    # pyworld imports pkg_resources, removed in setuptools>=81, so pin setuptools below.
+    "pyworld>=0.3",
+    "setuptools<80",
 ]
 
 [tool.uv.sources]
