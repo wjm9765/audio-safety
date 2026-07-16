@@ -9,6 +9,75 @@ moved beyond the original Audio-RDO gate. The locked Exp1 criteria remain in
 and the latest self-contained Run 7/8 record is
 [session_20260714_phase_and_multidim.md](./session_20260714_phase_and_multidim.md).
 
+## Active handoff — OHBI dropped; content–channel causal factorization adopted (2026-07-16 PM)
+
+> This is the current top-of-stack decision. It supersedes the OHBI-based manuscript
+> spine below (the 2026-07-16 "Conditional manuscript spine" and "Discussion subject"
+> sections). Those are retained as an auditable archive, not the active plan. `design.md`
+> §0 and the append-only Run 7/8 decisions are unchanged.
+
+**Fixed premise (settled, not the research question):** content-identical low-level
+channel manipulation flips Qwen2-Audio's safety verdict (refusal → operational
+compliance). Perceptual manipulations do **not** attack this model (emotion total null;
+style not axis-mediated; F0/formant near noise floor), while low-level signal-processing
+manipulations do (phase-incoherence dose-response, 84% items correct sign). The open
+question is the **internal** one: *what happens inside the model when a content-identical
+channel change flips the verdict?*
+
+**OHBI is abandoned as a claimed contribution.** Blind Claude↔Codex (`gpt-5.6-sol`,
+xhigh) adjudication, three rounds, converged: OHBI fails all three PI axes —
+audio-specificity **1/5** (the protocol runs unchanged on text-paraphrase or image-JPEG
+families), novelty (conjunction of interchange + refusal direction + metamorphic framing
++ held-out-family logic, all preempted; "identification" not earned on hybrid states),
+and own-method (only the combination is new). Codex predicted **5/10 weak reject even if
+all empirical results land positively**. Our own asset also breaks OHBI: phase and pitch
+displacements align at cos 0.996, so they cannot serve as each other's sealed holdout.
+Full record: [`outputs/cross_checks/20260716_ohbi_methodology_adjudication.md`](../../../outputs/cross_checks/20260716_ohbi_methodology_adjudication.md).
+
+**Adopted direction: content–channel causal factorization.** Import the classical
+speech channel-compensation lineage (NAP / JFA / i-vector / fMLLR — *fix the target,
+vary only the nuisance, and the observed variation defines the nuisance subspace*) into
+frozen-audio-LLM internals. Because we hold linguistic content exactly fixed and vary
+only the physical channel, `Δ = H(attacked) − H(neutral)` is by construction a pure
+channel response, fit **safety-blind** and applied **donor-free** (infer the channel
+state from the attacked sequence itself; never copy the clean state). This fixes OHBI's
+two fatal flaws (circular outcome-fitting; artificial hybrid patch). Audio-specificity is
+irreducible: the paired same-waveform contrast, the two speech timescales, and the
+documented Whisper expectation to falsify (final encoder layers suppress
+speaker/channel and abstract to content — so channel *should* be gone before the
+projector, yet the flip proves it is not). Codex: **7/10** if fresh + preregistered +
+safety-blind + donor-free + multi-route + benchmarked vs JFA/NAP/fMLLR + 2 architectures;
+must lose to those classical baselines to earn the own-method claim. Full record:
+[`outputs/cross_checks/20260716_internal_analysis_methodology.md`](../../../outputs/cross_checks/20260716_internal_analysis_methodology.md).
+
+**Literature check (this session, direct-fetch verified).** The *phenomenon* is
+preempted: AJailBench (ACL 2026), Signal-BoN, Best-of-N (NeurIPS 2025), MTAM (ASE 2025)
+all show content/transcript-preserving low-level perturbations breaking audio safety —
+but **none analyzes why inside the model** (AJailBench even reports time-stretch/fade as
+strongest with zero acoustic explanation). The *internal* work uses a different stimulus:
+AIA (ICML 2026, 2605.18168) does refusal-margin + late-layer refusal-vector drift +
+bidirectional full-residual patching, but its harmful content is in **text** with a
+separate benign audio trigger, and its ALS are **perceptual** (emotion/accent/age),
+explicitly "not codec/phase artifacts". So: our exact setting (harmful speech itself,
+low-level-transformed, analyzed internally) is unoccupied — but **AIA already preempts
+the Run 7 method** (margin + drift + patching), which independently confirms the move off
+OHBI/Run-7-style analysis. Tension to address in any writeup: AIA finds perceptual ALS
+attack 10 LALMs, whereas our Run 8 emotion is null on Qwen2-Audio (different stimulus
+construction).
+
+**New/updated docs this session:**
+[`experiment_history_20260716.md`](./experiment_history_20260716.md) (plain-language full
+arc), the two cross-check records above.
+
+**Open integrity item (not yet done):** Run 7's `results.md` entry records "PROCEED"
+though the registered rule `G1 AND (G2 or G5) AND G3` was not met (G1 miss, McNemar
+p=0.092). An append-only correction to `results.md` is still pending.
+
+**Next decision (PI):** whether to model the EQ route as a second route from the start
+(strong, expensive, 7/10 target) or claim only the phase-like route and mark EQ an
+explicit limitation (5–6/10, safe). The EQ double dissociation is a strong adverse prior
+against any single-axis design but is not yet a positive localization (n=5, margin-only).
+
 ## Active handoff — certified margin spine and phase-frontend mechanism (2026-07-15)
 
 The current paper spine is **Certified Acoustic Safety Margin for LALMs**, specified in
@@ -68,6 +137,10 @@ than the scientific contribution.
 
 ### Conditional manuscript spine after literature and reviewer audit (2026-07-16)
 
+> **SUPERSEDED (2026-07-16 PM).** OHBI was dropped as a contribution after the blind
+> Claude↔Codex methodology adjudication; the active plan is the content–channel causal
+> factorization in the top-of-file handoff. This section is retained as an archive.
+
 The review has now been converted into a conditional five-paragraph manuscript shape
 in [manuscript_candidate_20260716.md](./manuscript_candidate_20260716.md). This remains
 a direction candidate, not an active run, preregistration, result, or silent replacement
@@ -113,6 +186,12 @@ The pass therefore clears the framing/design question only; all confirmatory res
 slots remain missing and the manuscript is not submission-ready.
 
 ### Discussion subject — full-L18 replacement versus coordinate-only interchange (open)
+
+> **SUPERSEDED (2026-07-16 PM)** as an OHBI-context discussion. The construct-validity
+> concern it raises (a full-L18 swap transfers far more than refusal information) remains
+> valid and is subsumed by the adopted content–channel factorization, which fits the
+> channel subspace safety-blind and intervenes donor-free rather than swapping full state.
+> Retained as an archive.
 
 > **Status:** discussion subject only. This is not an approved design choice,
 > preregistration, active Run 9, implementation instruction, or result. It records a
