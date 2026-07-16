@@ -1,13 +1,301 @@
-# Audio-RDO Gate Context
+# AudioSafety Experiment Context
 
-Last updated: 2026-07-12
+Last updated: 2026-07-16
 
-This file preserves the working context behind the current experiment rewrite. The
-folder name remains `exp1_refusal_cone_drift` for repository continuity, but the
-completed first phase was the **Audio-RDO Refusal Axis Existence Gate** and the
-active next design is the Run 4 conversion/writer test audited below.
+This file preserves the working context behind the experiment sequence. The folder
+name remains `exp1_refusal_cone_drift` for repository continuity, but the project has
+moved beyond the original Audio-RDO gate. The locked Exp1 criteria remain in
+[design.md](./design.md), append-only run decisions remain in [results.md](./results.md),
+and the latest self-contained Run 7/8 record is
+[session_20260714_phase_and_multidim.md](./session_20260714_phase_and_multidim.md).
 
-## Current State (updated 2026-07-13)
+## Active handoff — certified margin spine and phase-frontend mechanism (2026-07-15)
+
+The current paper spine is **Certified Acoustic Safety Margin for LALMs**, specified in
+[run5_acoustic_safety_margin_direction_20260713.md](./run5_acoustic_safety_margin_direction_20260713.md).
+Its make-or-break deliverable is still a sound, non-vacuous deterministic certificate
+over a perceptually calibrated low-dimensional JND transform set, with a defensible
+link from the certifiable continuous margin to generated safety behavior and judge
+error. The existing Clopper-Pearson pilot certifies a majority probability under its
+sampling distribution; it does not certify that every transform in a box preserves
+refusal.
+
+The strongest mechanistic support is the completed phase-frontend Run 7 recorded in
+[run7_phase_frontend_distortion_direction_20260714.md](./run7_phase_frontend_distortion_direction_20260714.md).
+Its narrow result is that phase-vocoder-induced realized frontend distortion is
+associated with L18 refusal-related displacement and margin erosion, while persistent
+steering of the frozen refusal direction improves the margin relative to an orthogonal
+ensemble and reverses some selected outputs.
+This is a supporting mechanistic reframe, **not** a literal pass of the registered
+Run 7 decision rule: G1, G2, and G4 missed, G3 was partial, and G5 passed. The original
+supporting interpretation called the axis contributory rather than exclusive, but the
+stronger natural-mediator reading is not established; decoding failure also rises with
+the phase dose.
+
+The latest geometry result also changes the default expectation for future work.
+Refusal-category geometry is descriptively multidimensional (participation ratio about
+3.78), but the observed DSP attack displacement is nearly one-dimensional inside that
+space (participation ratio about 1.49), rank-`k` adds no clear margin-prediction gain,
+and the two tested DSP displacement directions align (`cos = 0.996`). Run 8 emotion is
+`AMBIGUOUS` because the manipulation did not measurably attack the model. There is no
+active or preregistered Run 9 in `main`.
+
+### Scope correction after phase-independence review (2026-07-16)
+
+The Run 7 causal result remains tied to its phase-vocoder treatment. Freezing the L18
+refusal direction means that it was not refit on Run 7 phase outcomes; it does not make
+the treatment or causal conclusion phase-independent. Current evidence supports
+phase-linked L18 displacement and refusal-direction actuator evidence, but not a full
+`low-level transform -> shared L18 mediator -> full-response flip` causal chain. In
+particular, G1/G2/G4 missed and G3 was partial; G5 passed its preregistered
+continuous-margin primary. Its preregistered discordant-subgroup rule yielded 10
+observed-outcome-conditioned item×sign cells, so the 60% full-response flip-back was
+exploratory under the registered `n<15` rule and used a refusal-prefix heuristic rather
+than fresh two-judge adjudication. Its persistent all-token intervention is also
+stronger than a donor-coordinate/path intervention.
+
+The phase-independent research direction has been audited separately in
+[review_20260716_content_conditioned_safety_invariance.md](./review_20260716_content_conditioned_safety_invariance.md).
+That document is a review candidate, not a Run 9 preregistration. Its proposed object
+is content-conditioned safety invariance under fixed, outcome-independent channel
+transformations; its load-bearing causal test is bidirectional activation interchange
+with a final, mechanistically distinct operator family left entirely
+untouched by fitting and model selection. A new backend of a seen family supports only
+a lower-tier implementation-transfer claim. Run 7 remains the completed
+preregistered phase-specific supporting result, but it is only pilot/method-development
+evidence for this broader candidate. EQ/codec/resampling are evidence coverage rather
+than the scientific contribution.
+
+### Conditional manuscript spine after literature and reviewer audit (2026-07-16)
+
+The review has now been converted into a conditional five-paragraph manuscript shape
+in [manuscript_candidate_20260716.md](./manuscript_candidate_20260716.md). This remains
+a direction candidate, not an active run, preregistration, result, or silent replacement
+of the approved certified-margin work. Independent reviews judged the motivating
+question compelling but the completed evidence insufficient: Run 7 alone would be a
+phase-specific actuator result, not the claimed paper.
+
+For the user's current scientific question, reviewer consensus recommends one
+manuscript spine:
+
+> Did the target model perceive a different request, or did it perceive the same
+> request and make a different safety decision?
+
+The proposed method-level object is an **Operator-Held-Out Bidirectional Interchange
+(OHBI) test**. It freezes the categorical full-response endpoint and semantic checks
+before transformed outcomes, estimates paired behavior on every screen-eligible item, uses
+development families to select a candidate route, and tests sham-coordinate
+restoration and active-coordinate induction without refitting on a mechanistically
+distinct sealed family. OHBI uses standard activation interchange; the proposed
+contribution is the sealed-family identification protocol, not a new patching
+algorithm. Natural-run donor coordinates still create a hybrid patched state, so OHBI
+does not make the learned state a natural mediator by construction.
+
+This novelty claim is deliberately narrower after checking MTAM, AJailBench,
+Signal-BoN, ReGap, LOCA, Audio-Text Fusion causal tracing, and Beyond Text Following.
+Audio semantic-invariance testing, transform search, refusal steering, local causal
+jailbreak explanations, audio activation localization, and same-audio counterfactual
+patching are all already occupied. The remaining candidate is the combination of a
+fixed within-audio cause, a paired full-response effect, bidirectional interchange,
+and no-refit evaluation on an unseen operator family.
+
+The final result must choose exactly one conclusion: shared route, operator-private
+routes, behavioral-only mechanism null, or phase-specific narrowing. EQ, codec, and
+resampling provide coverage for this discrimination; they are not the contribution.
+Family-indexed margins may remain descriptive, while a deterministic certificate is a
+separate companion branch and should not appear as a required first-page contribution
+unless a sound proof actually lands.
+
+An independent final narrative review scored this conditional spine **8.7/10
+(`PASS`) with no P0 narrative flaw**, while scoring the actual Run 7 evidence only
+**2.5/10 for the proposed broad paper** and **5/10 as a narrow phase-specific pilot**.
+The pass therefore clears the framing/design question only; all confirmatory result
+slots remain missing and the manuscript is not submission-ready.
+
+### Discussion subject — full-L18 replacement versus coordinate-only interchange (open)
+
+> **Status:** discussion subject only. This is not an approved design choice,
+> preregistration, active Run 9, implementation instruction, or result. It records a
+> construct-validity concern that must be resolved before any future causal protocol is
+> frozen.
+
+The open concern is that replacing the complete L18 residual state may transfer far
+more than refusal-related information. A full L18 state can jointly contain perceived
+content, acoustic quality and operator identity, harmfulness, instruction-following
+state, generation state, and policy-related information. Therefore a successful
+full-state sham↔active replacement would show only that the selected L18 state contains
+some interventionally relevant information; by itself it would not identify a refusal
+mechanism. The earlier causal-attribution run already produced a compatible warning:
+same-item full-state patching behaved like transfer of a generic clean/refusal-promoting
+state rather than an item-specific jailbreak cause.
+
+The proposal under discussion is:
+
+1. prohibit full-L18 replacement from serving as confirmatory evidence for a
+   refusal-specific or shared-route claim;
+2. if retained at all, use full-state replacement only as a discovery/localization
+   reference or implementation positive control;
+3. use coordinate-only interchange as the confirmatory intervention, preserving the
+   target run's off-coordinate L18 state as much as possible;
+4. consider the independently fitted and frozen refusal-related direction `r_A` as the
+   rank-1 primary candidate, with active/sham scalar coordinates
+   `c(a)=<h_L18(a),r_A>` interchanged in both directions;
+5. treat any learned `U` initially as an **operator-linked candidate interchange
+   component**, not a “refusal subspace”; call it refusal-related only after independent
+   refusal grounding, full-response causal specificity, semantic/utility controls, and
+   sealed-family confirmation;
+6. consider rank-`k>1` only as a secondary incremental test that must improve over the
+   frozen rank-1 candidate under equal tuning budgets on untouched full responses.
+
+The coordinate-only proposal would implement, for unit-normalized `r_A`, the paired
+replacement
+
+```text
+h_active' = h_active + (c_sham - c_active) r_A
+h_sham'   = h_sham   + (c_active - c_sham) r_A
+```
+
+This operation still creates a hybrid activation and does not establish natural
+mediation by construction. In addition, difference-in-means grounding makes `r_A`
+more interpretable than an arbitrary outcome-fitted direction but does not guarantee
+refusal purity: systematic differences in harmfulness, content, response style, or
+other population properties can remain in the mean contrast.
+
+Provisional claim discipline for discussion:
+
+| Intervention result | Maximum provisional interpretation |
+|---|---|
+| Full L18 replacement changes the response | The selected L18 state contains outcome-relevant information; no refusal-specific claim |
+| Arbitrary learned `U` interchange changes the response | `U` is an interventionally relevant candidate component; no automatic refusal label |
+| Independently frozen `r_A` coordinate interchange changes the response | Evidence that a refusal-related component contributes to the verdict, subject to specificity controls |
+| Natural operator displacement along frozen `r_A` plus bidirectional sealed-family OHBI and path controls | Evidence consistent with a shared refusal-related route across the named tested families |
+| Rank-`k>1` adds held-out causal effect beyond rank 1 | Evidence that a low-dimensional component is needed; otherwise retain the vector account |
+
+Questions that remain open before approval are: whether `r_A` can be grounded on an
+adequately matched independent population; whether the primary site should remain L18;
+whether `r_A`, its operator-reachable projection, or another predeclared component is
+the correct OHBI target; whether a full-state localization reference is useful enough
+to retain; and what incremental-effect, semantic-preservation, benign-utility, and
+matched-null thresholds would make each claim identifiable. Until those questions are
+resolved and preregistered, neither full-state nor coordinate-only interchange is the
+official next experiment.
+
+## COAST-R-derived review candidate — operator-reachable causal bottleneck (inactive)
+
+> **Status:** review candidate only. This section is **not** an active run,
+> preregistration, frozen analysis plan, implementation claim, or result. It does not
+> modify `design.md` §0, the append-only Run 7/8 decisions, or the priority of the
+> certified-margin spine. No run number is assigned until the PI approves a separate
+> design and preregistration. For the current direction decision, it is superseded by
+> [the 2026-07-16 invariance/causal review](./review_20260716_content_conditioned_safety_invariance.md);
+> the material below is retained as an auditable candidate archive, not a competing
+> active plan.
+
+An earlier branch proposed COAST-R (Causal Operator-Aligned Safety Transport into
+Refusal) as a multidimensional audio-to-refusal method. The latest evidence makes a
+different, more falsifiable use of its core machinery worth review:
+
+> Do declared audio operators that pass frozen content-preservation gates reach more
+> than one incrementally causal refusal-transport component on held-out items and
+> operators, or do rich refusal representations collapse to a shared low-dimensional
+> causal bottleneck?
+
+The expected result is not required to be multidimensional. A reproducible rank-1
+causal effect followed by adequately powered null incremental effects at ranks 2/3
+would strengthen the candidate bottleneck hypothesis. A complete causal null would instead
+show no detectable COAST-R transport under the frozen design; it is evidence against
+measurable transport when adequately powered and otherwise inconclusive about the
+bottleneck. Neither result permits a post-hoc search over layers, ranks, token
+positions, templates, or operator subsets.
+
+### Candidate objects and leakage controls
+
+| Object | Proposed role | Required separation |
+|---|---|---|
+| `B` | Outcome-free basis of activation deltas naturally reachable by declared audio operators | Fit from neutral/transformed deltas without behavior labels; select rank by item-grouped held-out coverage, not activation variance alone |
+| `R` | Descriptive refusal basis and continuity link to frozen `r_A`/established cone baselines | Fit on a fold disjoint from `U`; distinguish refusal from harmfulness and generic utility |
+| `U ⊂ B` | Smallest nested transport basis associated with changes in refusal behavior | Supervision may select directions only inside frozen `B`; evaluate cumulative rank rather than interpreting arbitrary columns |
+| `f_train` | Predictor of natural held-out `B` coordinates from the neutral state plus declared operator descriptors/severity | No transformed test activation, safety label, downstream gradient, continuation score, or induction loss; freeze before causal generation |
+
+Use item-grouped outer cross-fitting with pairwise-disjoint `B/R/U/f_train` roles.
+The existing `n=150` Run 6 cohort is fully exposed and may be used only for an
+exploratory implementation kill-test. Cross-fitting cannot turn it back into a
+confirmatory set, and the four-way role split may leave too little power; simulation
+must determine whether Stage A is informative before GPU execution.
+
+### Endpoint and causal separation
+
+The proposed primary model-side endpoint is a shifted, teacher-forced, multi-token
+refusal-minus-compliance continuation curve. The existing first-token refusal margin
+remains a baseline, while blinded full-response behavior is the primary scientific
+causal endpoint. Continuation banks and chat templates are construct choices and need
+frozen sensitivity checks; likelihood on a small phrase bank cannot substitute for
+judged behavior.
+
+For a paired activation delta `δ = h_transformed - h_neutral`, decompose it into
+`δ_U` and `δ_perp` under the frozen reachable transport basis. The required causal
+interpretations are deliberately asymmetric:
+
+- subtracting same-pair `δ_U` from the transformed state tests component
+  mediation/restoration;
+- adding same-pair `δ_U` to the neutral state is a reconstruction sanity check, not
+  primary sufficiency evidence;
+- adding an out-of-pair `δ_hat = f_train(h_neutral, operator, severity)` without
+  reading the transformed test state is the primary sufficiency test;
+- cumulative rank-1 → rank-`k` effects must beat rank/reconstruction-matched reachable
+  nulls, wrong-item and wrong-operator donors, established `r_A`/DIM/RDO baselines,
+  and benign/hard-benign utility controls.
+
+The intervention operator itself remains a review item. The archived prototype
+implemented an unexecuted path intended to add an exact raw delta once at frozen
+L18/P2 during prefill; it was unit-tested only on a tiny model, not validated in a
+Qwen2-Audio GPU run. The completed phase Run 7 actually used a persistent all-token
+refusal-direction restoration. These estimate different causal questions and must not
+be pooled. A future preregistration must choose one primary operator, justify its
+KV-cache behavior on real Qwen2-Audio generation, and label the other as a sensitivity
+condition.
+
+### Review gates before activation
+
+The earlier branch's numerical thresholds are **not adopted here**. Any thresholds
+must be frozen only after endpoint variance, multiplicity, and power are estimated
+without inspecting a new confirmatory cohort. Review should reject or defer the method
+unless all of the following are credible:
+
+1. rank 2/3 can be tested for incremental held-out multi-token prediction and a
+   positive out-of-pair full-response causal effect beyond rank 1 and matched nulls;
+2. `f_train` beats an operator-mean predictor on natural delta coordinates and
+   preserves the declared severity/dose ordering before any induction result is seen;
+3. inference includes item bootstrap/permutation uncertainty, multiplicity handling,
+   benign over-refusal/utility, and stability across seeds and role rotations;
+4. a genuinely new multi-operator cohort freezes operator implementations, perceptual
+   preservation gates, eligibility, endpoints, and an untouched-operator test;
+5. any generalization claim includes a second transform backend and, for a paper-level
+   result, a structurally different Audio/Speech LLM;
+6. the incremental value over the certified-margin spine and the completed phase
+   counterfactual is large enough to justify the added data and intervention compute.
+
+Stop the multidimensional branch if later ranks do not add causal effect, if the
+label-free predictor fails, if benign cost exceeds the future frozen tolerance, or if
+no mode transfers to an untouched operator. Only a stable rank-1 causal effect, a
+valid predictor, calibrated matched nulls, adequate power, and no incremental
+later-rank effect together support a shared low-dimensional bottleneck. Predictor,
+utility, or transfer-gate failures are method/protocol `NO-GO` outcomes and must be
+reported as such, not reinterpreted as bottleneck evidence or permission to refit the
+claim.
+
+### Integration status
+
+The prototype code and tests remain preserved on `agent/run7-causal-transport` at
+`7d58786`; they are not present or executed on `main`. Potentially reusable pieces are
+the multi-token continuation scoring helpers, teacher-forcing guards, exact raw-delta
+intervention, grouped reachable-basis/transport estimators, and leakage tests. Do not
+merge the old `run7` config, pipeline, CLI, or context text as-is. If this review
+candidate is approved, start from the then-current `main`, assign the next available
+run number, port only the reviewed components into the config-driven module structure,
+and freeze a new preregistration before collecting confirmatory outcomes.
+
+## Historical State (snapshot updated 2026-07-13)
 
 > **세션 전체 기록(브리프·Codex 8라운드·pilot 리포트):**
 > [session_20260713_directionfinding/](./session_20260713_directionfinding/README.md).

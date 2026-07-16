@@ -1,4 +1,14 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(git -C /Users/wjm/Desktop/2026Files/ICLR_AudioSafety/audio_safety log --oneline -20)",
+      "Bash(git -C /Users/wjm/Desktop/2026Files/ICLR_AudioSafety/audio_safety status --short)",
+      "WebFetch(domain:arxiv.org)",
+      "Bash(git -C /Users/wjm/Desktop/2026Files/ICLR_AudioSafety/audio_safety log --oneline -10)",
+      "Bash(git -C /Users/wjm/Desktop/2026Files/ICLR_AudioSafety/audio_safety show --stat 9826bec)",
+      "Bash(git -C /Users/wjm/Desktop/2026Files/ICLR_AudioSafety/audio_safety show --stat 7e64c90)"
+    ]
+  },
   "enabledMcpjsonServers": [
     "codex"
   ]
