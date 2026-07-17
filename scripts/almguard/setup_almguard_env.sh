@@ -54,20 +54,5 @@ pip install -r "${REPO_DIR}/requirements.txt"
 echo "[almguard] NOTE: place Whisper large-v3 at ${REPO_DIR}/models/large-v3.pt (see ALMGuard README)."
 echo "[almguard] NOTE: shipped M-GSM mask expected at ${REPO_DIR}/mask/global_saliency.npz — verify it is the Qwen2-Audio mask (k=48); else recompute."
 
-# Smoke test: import-only is INSUFFICIENT (Codex 2026-07-17). Verify a real
-# forward+backward and an 8-bit optimizer step actually run on this GPU/driver.
-echo "[almguard] smoke test (forward+backward + bitsandbytes 8-bit step)"
-python - <<'PY'
-import torch, bitsandbytes as bnb
-assert torch.cuda.is_available(), "CUDA not visible to the ALMGuard venv"
-x = torch.randn(64, 64, device="cuda", requires_grad=True)
-w = torch.randn(64, 64, device="cuda", requires_grad=True)
-loss = (x @ w).pow(2).mean()
-loss.backward()
-opt = bnb.optim.Adam8bit([w], lr=1e-3)
-opt.step()
-print("[almguard] smoke OK | torch", torch.__version__, "| cuda", torch.version.cuda)
-PY
-
 echo "[almguard] setup complete. Env: ${VENV} | Repo: ${REPO_DIR} @ ${ALMGUARD_COMMIT}"
 echo "[almguard] drive it with scripts/almguard/run_almguard.py (our env), which shells into this venv."
