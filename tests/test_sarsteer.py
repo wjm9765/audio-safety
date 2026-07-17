@@ -11,8 +11,11 @@ import pytest
 
 from audio_safety.pipelines.sarsteer import (
     build_sarsteer_vectors,
+    extract_paper_refusal_vectors,
+    load_sarsteer_metadata,
     load_sarsteer_vectors,
     orthogonal_complement,
+    resolve_sarsteer_implementation,
     safe_subspace,
     save_sarsteer_vectors,
 )
@@ -166,3 +169,122 @@ def test_multilayer_steering_normalize_flag_unit_scales():
         out = layers[0](hidden)
     unit = torch.tensor(v) / torch.linalg.vector_norm(torch.tensor(v))
     assert torch.allclose(out, hidden + unit, atol=1e-6)
+
+
+def test_implementation_metadata_roundtrips_and_pre_mode_is_legacy(tmp_path):
+    path = tmp_path / "vectors.npz"
+    save_sarsteer_vectors(
+        path,
+        {0: np.ones(3, dtype=np.float32)},
+        {"implementation": "paper_faithful"},
+    )
+    meta = load_sarsteer_metadata(path)
+    assert resolve_sarsteer_implementation(meta) == "paper_faithful"
+    # Bundles predating the mode field are legacy artifacts.
+    assert resolve_sarsteer_implementation({}) == "legacy_reconstruction"
+    assert resolve_sarsteer_implementation({"implementation": None}) == "legacy_reconstruction"
+
+    with pytest.raises(ValueError, match="unsupported"):
+        resolve_sarsteer_implementation({"implementation": "official_41440ae"})
+
+
+def test_paper_mode_pins_last_scope_and_no_system_prompt():
+    from audio_safety.pipelines.sarsteer import (
+        sarsteer_position_scope,
+        sarsteer_system_prompt,
+    )
+
+    # The paper steers h(Q) at the last token position and prepends no system prompt.
+    assert sarsteer_position_scope("paper_faithful") == "last"
+    assert sarsteer_system_prompt("paper_faithful") is None
+    assert sarsteer_position_scope("legacy_reconstruction") == "all"
+    assert sarsteer_system_prompt("legacy_reconstruction") == "You are a helpful assistant."
+
+
+def test_multilayer_last_scope_only_changes_last_forward_position():
+    torch = pytest.importorskip("torch")
+    import types
+
+    from audio_safety.models.hooks import MultiLayerAdditiveSteering
+
+    class Identity(torch.nn.Module):
+        def forward(self, x):
+            return x
+
+    layer = Identity()
+    model = types.SimpleNamespace(
+        language_model=types.SimpleNamespace(layers=torch.nn.ModuleList([layer]))
+    )
+    vector = np.array([2.0, -1.0], dtype=np.float32)
+    prefill = torch.zeros(1, 4, 2)
+    with MultiLayerAdditiveSteering(
+        model,
+        vectors={0: vector},
+        alpha=0.5,
+        normalize=False,
+        position_scope="last",
+    ) as steer:
+        prefill_out = layer(prefill)
+        decode_out = layer(torch.zeros(1, 1, 2))
+
+    assert torch.allclose(prefill_out[:, :-1, :], prefill[:, :-1, :])
+    expected = 0.5 * torch.tensor(vector)
+    assert torch.allclose(prefill_out[:, -1, :], expected)
+    assert torch.allclose(decode_out[:, -1, :], expected)
+    assert steer.applied_counts == {0: 2}
+
+
+def test_paper_refusal_uses_same_audio_and_shared_last_prompt_token(monkeypatch):
+    torch = pytest.importorskip("torch")
+    import types
+
+    import audio_safety.models.qwen2_audio as qwen
+
+    class Identity(torch.nn.Module):
+        def forward(self, hidden):
+            return hidden
+
+    class DummyModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.anchor = torch.nn.Parameter(torch.zeros(()))
+            self.language_model = types.SimpleNamespace(
+                layers=torch.nn.ModuleList([Identity(), Identity()])
+            )
+
+        def forward(self, prompt_value):
+            hidden = torch.zeros(1, 3, 2)
+            hidden[:, -1, 0] = prompt_value
+            for layer in self.language_model.layers:
+                hidden = layer(hidden)
+            return hidden
+
+    observed = []
+
+    def fake_prepare(_processor, conversation, *, device):
+        user = conversation[-1]
+        audio = user["content"][0]["audio_url"]
+        instruction = user["content"][1]["text"]
+        observed.append((audio, instruction, [message["role"] for message in conversation]))
+        value = 5.0 if instruction.endswith("REFUSE") else 2.0
+        return {"prompt_value": torch.tensor(value, device=device)}
+
+    monkeypatch.setattr(qwen, "prepare_qwen2_audio_inputs", fake_prepare)
+    vectors = extract_paper_refusal_vectors(
+        DummyModel(),
+        object(),
+        ["harm-a.wav", "harm-b.wav"],
+        "FIXED",
+        refusal_text="REFUSE",
+        system_prompt=None,
+    )
+
+    assert set(vectors) == {0, 1}
+    for vector in vectors.values():
+        np.testing.assert_allclose(vector, [3.0, 0.0])
+    assert observed == [
+        ("harm-a.wav", "FIXED", ["user"]),
+        ("harm-a.wav", "FIXEDREFUSE", ["user"]),
+        ("harm-b.wav", "FIXED", ["user"]),
+        ("harm-b.wav", "FIXEDREFUSE", ["user"]),
+    ]

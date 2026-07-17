@@ -1,0 +1,94 @@
+diff --git a/main.py b/main.py
+--- a/main.py
++++ b/main.py
+@@ -168,11 +168,15 @@ def qwen_mel_protection(
+     model_inputs = model.prepare_inputs_for_generation(**inputs)
+     model_inputs["input_ids"] = model_inputs["input_ids"].to(model.device)
+     model_inputs["attention_mask"] = model_inputs["attention_mask"].to(model.device)
+-    model_inputs["input_features"] = model_inputs["input_features"].to(model.device)
++    model_inputs["input_features"] = model_inputs["input_features"].to(
++        device=model.device, dtype=model.dtype
++    )
+     model_inputs["feature_attention_mask"] = model_inputs["feature_attention_mask"].to(model.device)
+ 
+     audio_feat = model_inputs["input_features"]
+     if perturb is None:
+-        perturb = torch.zeros_like(audio_feat, requires_grad=True, device=audio_feat.device)
++        perturb = torch.zeros_like(
++            audio_feat, dtype=torch.float32, requires_grad=True, device=audio_feat.device
++        )
+         perturb.data = 0.01 * torch.randn_like(perturb)
+ 
+@@ -181,7 +185,7 @@ def qwen_mel_protection(
+     start_time = time.time()
+ 
+     for epoch in range(num_epochs):
+-        new_feat = audio_feat + perturb
++        new_feat = audio_feat + perturb.to(dtype=audio_feat.dtype)
+         embeds = get_input_embeds(
+             model,
+             model_inputs["input_ids"],
+@@ -209,7 +213,7 @@ def qwen_mel_protection(
+         torch.cuda.empty_cache()
+ 
+     with torch.no_grad():
+-        final_feat = audio_feat + perturb
++        final_feat = audio_feat + perturb.to(dtype=audio_feat.dtype)
+         embeds = get_input_embeds(
+             model,
+             model_inputs["input_ids"],
+@@ -310,10 +314,20 @@ def main():
+     processor = AutoProcessor.from_pretrained(args.model_path)
+     model = Qwen2AudioForConditionalGeneration.from_pretrained(
+         args.model_path,
+-        device_map="auto"
++        device_map="auto",
++        torch_dtype=torch.bfloat16,
++        attn_implementation="sdpa",
+     )
+-    # asr_model = None
+-    asr_model = whisper.load_model(args.asr_path)
+-    asr_model.to("cuda:0")
++    model.eval()
++    model.requires_grad_(False)
++
++    saliency_cache = "./mask/global_saliency.npz"
++    if os.path.exists(saliency_cache):
++        # The cached branch of load_or_compute_saliency_data never reads the
++        # ASR model. Avoid keeping Whisper large-v3 on the A40 unnecessarily.
++        asr_model = None
++    else:
++        asr_model = whisper.load_model(args.asr_path)
++        asr_model.to("cuda:0")
+ 
+     # prepare output filenames
+diff --git a/eval_qwen.py b/eval_qwen.py
+--- a/eval_qwen.py
++++ b/eval_qwen.py
+@@ -56,8 +56,12 @@ def qwen_infer(
+     model_inputs = model.prepare_inputs_for_generation(**inputs)
+ 
+     with torch.no_grad():
+-        audio_feature = model_inputs["input_features"].clone()
+-        new_feature = audio_feature + perturb
++        audio_feature = model_inputs["input_features"].to(
++            device=model.device, dtype=model.dtype
++        )
++        new_feature = audio_feature + perturb.to(
++            device=audio_feature.device, dtype=audio_feature.dtype
++        )
+ 
+         input_embeds = get_input_embeds(
+             model,
+@@ -107,7 +111,10 @@ def main():
+     processor = AutoProcessor.from_pretrained(args.model_path)
+     model = Qwen2AudioForConditionalGeneration.from_pretrained(
+         args.model_path,
+-        device_map="auto"
++        device_map="auto",
++        torch_dtype=torch.bfloat16,
++        attn_implementation="sdpa",
+     )
++    model.eval()
+ 
+     # gather audio files

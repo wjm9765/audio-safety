@@ -11,6 +11,7 @@ import pytest
 from audio_safety.pipelines.almguard_io import (
     align_responses,
     excluded_training_files,
+    staged_mapping_row,
     staged_wav_name,
 )
 
@@ -31,6 +32,28 @@ def test_staged_name_validation():
         staged_wav_name(-1)
     with pytest.raises(ValueError):
         staged_wav_name(10**6)  # exceeds width 6
+
+
+def test_staged_mapping_preserves_run9_condition_and_assigns_index():
+    row = {
+        "index": 99,
+        "record_id": "r0",
+        "item_id": "q0",
+        "safety_label": "harmful",
+        "style": "neutral",
+        "condition": "phase_attack",
+        "path": "attack/q0.wav",
+        "reference_text": "request",
+        "transcript_control_passed": True,
+    }
+    mapped = staged_mapping_row(3, row)
+    assert mapped == {
+        **row,
+        "index": 3,
+        "staging_index": 3,
+        "staged_wav_name": "000003.wav",
+    }
+    assert mapped["condition"] == "phase_attack"
 
 
 def test_align_responses_attaches_each_row_to_its_own_output():

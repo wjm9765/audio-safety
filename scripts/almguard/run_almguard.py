@@ -26,11 +26,13 @@ import pickle
 import shutil
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 
 from audio_safety.pipelines.almguard_io import (
     align_responses,
     excluded_training_files,
+    staged_mapping_row,
     staged_wav_name,
 )
 
@@ -103,8 +105,7 @@ def _stage_wavs(manifest: Path, data_dir: Path, work: Path) -> list[dict]:
             dst.symlink_to(src.resolve())
         except OSError:
             shutil.copyfile(src, dst)
-        keep = ("item_id", "safety_label", "style", "path")
-        mapping.append({"index": i, **{k: row.get(k) for k in keep}})
+        mapping.append(staged_mapping_row(i, row))
     return mapping
 
 
@@ -121,15 +122,23 @@ def _run_eval(args: argparse.Namespace, perturb: Path, defense: str) -> None:
     py, repo = _venv_python(args.almguard_root), _repo(args.almguard_root)
     work = args.work_dir or (args.out.parent / f"_almguard_{defense}")
     work.mkdir(parents=True, exist_ok=True)
-    mapping = _stage_wavs(args.manifest, args.data_dir, work)
-    save_path = work / "responses"
+    # A fresh invocation directory prevents stale staged WAVs or response PKLs
+    # from a prior/resumed call from corrupting positional alignment.
+    invocation = work / "invocations" / uuid.uuid4().hex
+    mapping = _stage_wavs(args.manifest, args.data_dir, invocation)
+    save_path = invocation / "responses"
     save_path.mkdir(parents=True, exist_ok=True)
     cmd = [
-        str(py), "eval_qwen.py",
-        "--model_path", args.model_path,
-        "--wav_dirs", str((work / "wavs").resolve()),
-        "--perturb_path", str(perturb.resolve()),
-        "--save_path", str(save_path.resolve()),
+        str(py),
+        "eval_qwen.py",
+        "--model_path",
+        args.model_path,
+        "--wav_dirs",
+        str((invocation / "wavs").resolve()),
+        "--perturb_path",
+        str(perturb.resolve()),
+        "--save_path",
+        str(save_path.resolve()),
     ]
     print(f"[almguard] {defense}: {' '.join(cmd)} (cwd={repo})", flush=True)
     subprocess.run(cmd, cwd=repo, check=True)
@@ -200,11 +209,16 @@ def main() -> None:
     py, repo = _venv_python(args.almguard_root), _repo(args.almguard_root)
     args.sap_out.mkdir(parents=True, exist_ok=True)
     cmd = [
-        str(py), "main.py",
-        "--model_path", args.model_path,
-        "--asr_path", args.asr_path,
-        "--save_path", str(args.sap_out.resolve()),
-        "--wav_dirs", *[str(Path(d).resolve()) for d in args.adv_dirs],
+        str(py),
+        "main.py",
+        "--model_path",
+        args.model_path,
+        "--asr_path",
+        args.asr_path,
+        "--save_path",
+        str(args.sap_out.resolve()),
+        "--wav_dirs",
+        *[str(Path(d).resolve()) for d in args.adv_dirs],
     ]
     print(f"[almguard] train SAP: {' '.join(cmd)} (cwd={repo})", flush=True)
     subprocess.run(cmd, cwd=repo, check=True)

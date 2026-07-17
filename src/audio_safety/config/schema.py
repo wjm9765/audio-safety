@@ -595,22 +595,26 @@ class PitchRepresentationConfig(StrictModel):
 
 
 class SARSteerConfig(StrictModel):
-    """Faithful SARSteer defense (arXiv:2510.17633) for the Run 9 defense gate.
+    """SARSteer defense (arXiv:2510.17633) for the Run 9 defense gate.
 
-    Inference-time refusal-subspace steering, implemented in-house (no code was
-    released). Not a §0 gate; direction-finding defense probe. Fidelity NOTE
-    (Codex 2026-07-17): ``extraction_position`` and the calibration counts are the
-    paper's under-specified knobs — confirm against SARSteer Appendix A.5 before a
-    confirmatory run. ``alpha`` multiplies the RAW orthogonal component (steering
-    uses ``normalize=False``); do not unit-normalize.
+    ``paper_faithful`` (default) implements the paper's equations: harmful-audio
+    refusal contrast Q=(a,t) vs Q'=(a,t+p), last-prompt-token capture, paired
+    purified-safe PCA, and last-position steering. SARSteer released no code, so
+    the paper is the only authority. ``legacy_reconstruction`` reloads the
+    superseded 2026-07-17 artifacts and cannot support a verdict. Not a §0 gate;
+    this is a direction-finding defense probe. ``alpha`` multiplies the RAW
+    orthogonal component (``normalize=False``). ``extraction_position`` applies
+    only to legacy mode; paper mode fixes final-prompt-token capture.
+
     """
 
     enabled: bool = False
+    implementation: Literal["legacy_reconstruction", "paper_faithful"] = "paper_faithful"
     alpha: float = 0.1
     n_pcs: int = 10
     refusal_prompt: str = "I cannot assist with that."
-    # How per-layer activations are pooled for the refusal contrast: "mean_all"
-    # (literal Eq. 4, non-degenerate) or "last_token" (control only; confounded).
+    # LEGACY-ONLY pooling knob. The paper (§3.3) reads the last token position;
+    # "mean_all" is a deviation retained solely for artifact reproduction.
     extraction_position: str = "mean_all"
     # Position at which benign-speech activations are read for the safe-space PCA.
     benign_position: str = "first_generation_prelogit"

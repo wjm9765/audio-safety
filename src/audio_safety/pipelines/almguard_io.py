@@ -6,7 +6,7 @@ logic — the two places a silent gate corruption can hide — are unit-testable
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +25,23 @@ def staged_wav_name(index: int, width: int = 6) -> str:
     if index >= 10**width:
         raise ValueError(f"index {index} exceeds zero-pad width {width}")
     return f"{index:0{width}d}.wav"
+
+
+def staged_mapping_row(index: int, row: Mapping[str, Any]) -> dict[str, Any]:
+    """Preserve manifest metadata while assigning the staged positional index.
+
+    In particular, Run 9 separates vocal ``style`` from experimental
+    ``condition``.  Dropping ``condition`` here would collapse clean and
+    attacked rows to the same legacy style and corrupt gate evaluation.
+    """
+    if index < 0:
+        raise ValueError("index must be non-negative")
+    return {
+        **dict(row),
+        "index": index,
+        "staging_index": index,
+        "staged_wav_name": staged_wav_name(index),
+    }
 
 
 def align_responses(responses: Sequence[Any], mapping: Sequence[dict]) -> list[dict]:

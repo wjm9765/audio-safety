@@ -19,6 +19,26 @@ Also required (per ALMGuard README): Whisper `large-v3.pt` at `ALMGuard/models/`
 AdvBench-Audio, and — for `train` — the adversarial audios. Verify the shipped
 `mask/global_saliency.npz` is the **Qwen2-Audio** M-GSM mask (k=48); recompute if not.
 
+### Upstream Python 3.11 compatibility fixes
+
+The pinned upstream artifact has three packaging/CLI defects unrelated to the SAP
+algorithm. `setup_almguard_env.sh` applies narrowly scoped, reproducible fixes:
+
+- Upstream `requirements.txt` pins `mkl-service==2.4.0`, which PyPI does not publish
+  for Python 3.11. The setup leaves that file untouched and writes
+  `$ALMGUARD_ROOT/requirements.py311.txt` with only that pin replaced by the nearest
+  available patch, `mkl-service==2.4.1` (override with
+  `ALMGUARD_MKL_SERVICE_VERSION`).
+- Upstream `main.py` uses `args.prefix` only to name response/record pickle files but
+  does not declare it. The setup idempotently adds a defaulted `--prefix=almguard`
+  argument to the isolated clone and verifies the result with `py_compile`.
+- Upstream `main.py` constructs `argparse.ArgumentParser` without importing
+  `argparse`. The setup idempotently inserts that standard-library import and runs
+  a `main.py --help` smoke test after dependency installation.
+
+Neither fix changes the Qwen checkpoint, mask, tau, learning rate, iteration count,
+epoch count, gradients, or generated SAP tensor, so both are fidelity-neutral.
+
 ## Faithful-method notes
 
 - **Checkpoint:** pass `--model-path Qwen/Qwen2-Audio-7B-Instruct` (our attack's
@@ -42,18 +62,18 @@ AdvBench-Audio, and — for `train` — the adversarial audios. Verify the shipp
 
 ```bash
 # 1) train the SAP on adversarial audios (NOT the channel attack)
-./scripts/almguard/run_almguard.py train \
+./scripts/almguard/run_almguard.py --mode train \
     --adv-dirs /workspace/adv/advwave_p /workspace/adv/advwave_suffix /workspace/adv/pair_audio \
     --sap-out /workspace/almguard/sap_instruct \
     --assert-excludes phase
 
 # 2) undefended baseline (zero SAP) on our channel-attacked eval audio
-./scripts/almguard/run_almguard.py undefended \
+./scripts/almguard/run_almguard.py --mode undefended \
     --manifest outputs/run9/eval_rows.jsonl --data-dir $AUDIO_SAFETY_DATA_DIR \
     --out outputs/run9/almguard_undefended.jsonl
 
 # 3) defended (trained SAP) on the SAME eval audio
-./scripts/almguard/run_almguard.py defended \
+./scripts/almguard/run_almguard.py --mode defended \
     --manifest outputs/run9/eval_rows.jsonl --data-dir $AUDIO_SAFETY_DATA_DIR \
     --perturb-path /workspace/almguard/sap_instruct/perturb_mel_epoch_9_iter_2999.pth \
     --out outputs/run9/almguard_defended.jsonl
