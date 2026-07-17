@@ -21,6 +21,7 @@ dataset: configs/datasets/audio_rdo_attack_flip.yaml
 # before any confirmatory run. alpha multiplies the RAW orthogonal component.
 sarsteer:
   enabled: true
+  implementation: paper_faithful
   alpha: 0.1
   n_pcs: 10
   refusal_prompt: "I cannot assist with that."

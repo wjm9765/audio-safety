@@ -1,54 +1,101 @@
-"""Faithful SARSteer defense (arXiv:2510.17633), reimplemented in-house.
+"""SARSteer defense (arXiv:2510.17633), reproduced from the paper.
 
-SARSteer has NO public code release; this reconstructs Algorithm 1 from the paper
-so we can run it as a GATE against our content-preserving channel attack. The
-method has two ingredients, applied at inference with the model frozen:
+SARSteer released **no code** (verified 2026-07-17: the paper carries no
+repository link and no public implementation exists). The authority for this
+module is therefore the paper text alone — §3.3 (notation, Eq. 1, Eq. 2), §4.1
+(Eq. 4), §4.2 (safe-space ablation) and Appendix A.5 (Algorithm 1).
 
-1. **Text-derived refusal vector, per decoder layer.** From TEXT (not audio)
-   harmful queries, contrast the activation with vs without an appended refusal
-   response, averaged over a calibration set:
+``paper_faithful`` (default) implements those equations. ``legacy_reconstruction``
+is retained ONLY to reload/reproduce the superseded 2026-07-17 artifacts; it
+deviates from the paper in three ways and must not be used for a verdict (see
+"Legacy deviations" below).
 
-       v_ell = mean_i h_ell(harm_text_i + refusal) - mean_i h_ell(harm_text_i)
+Two ingredients, applied at inference with the model frozen:
 
-   The direction is text-derived precisely because SARSteer argues an audio
-   difference-in-means direction is noisy; the text refusal direction is
-   "modality-agnostic".
+1. **Text-derived refusal vector, per decoder layer** (Eq. 4, Algorithm 1 Step 1).
+   "Text-derived" means the refusal PROMPT ``p`` is text appended to the textual
+   instruction while **the audio is unchanged and present in both arms** — it does
+   NOT mean the query is text-only. With Q = (a, t) and Q' = (a, t + p):
 
-2. **Decomposed safe-space ablation.** PCA on benign-SPEECH activations gives the
-   top-k directions U_ell of benign variance. Keep only the component of the
-   refusal vector ORTHOGONAL to that safe space, so steering does not push benign
-   speech toward refusal:
+       v_ell = mean_i h_ell(a_i, t + p) - mean_i h_ell(a_i, t)
+
+   where, per §3.3, ``h_ell(Q)`` is "the activation at the last token position of
+   layer l". SARSteer derives the direction from the refusal text because it shows
+   (§3.3) that an audio difference-in-means direction degenerates into noise.
+
+2. **Decomposed safe-space ablation** (§4.2, Algorithm 1 Step 2). PCA over the
+   activations of the **paired safe queries** ``Q_safe`` — the LLM-purified,
+   lexically-similar benign counterparts of the harmful calibration queries
+   (§3.2), read at the same last-token position — gives the top-k directions
+   ``U_ell`` of safe variance. Keep only the orthogonal component:
 
        v_perp_ell = (I - U_ell U_ell^T) v_ell
 
-Inference steers every decoder layer at every generated position:
+Inference (Eq. 2 + Algorithm 1 Step 3) steers every decoder layer, adding the raw
+component at the last token position of each forward pass, i.e. at each generated
+token position:
 
-       h'_ell = h_ell + alpha * v_perp_ell        (alpha = 0.1, raw v_perp)
+       h'_ell = h_ell + alpha * v_perp_ell        (alpha = 0.1, k = 10, raw v_perp)
 
-Fidelity NOTES (Codex cross-check 2026-07-17; confirm against the paper's
-Appendix A.5 BEFORE any confirmatory run — these are the under-specified knobs):
+Paper-pinned constants: alpha = 0.1, k = 10, n = 100 calibration pairs, refusal
+prompt "I cannot assist with that.", every decoder layer. The paper reports (Fig.
+5a) that n is insensitive over 10..100, and (Fig. 5c) that k is flat over 5..45.
 
-- ``extraction_position``: how the per-layer activation is pooled for the refusal
-  contrast. Default ``"mean_all"`` = mean over all sequence tokens, the literal
-  reading of Eq. 4 (``mu = mean activation of the sequence``); non-degenerate.
-  ``"last_token"`` is a control only — a naive last-token contrast confounds the
-  refusal direction with terminal-token identity (Codex 2026-07-17). Confirm the
-  exact pooling against Appendix A.5 before a confirmatory run.
-- ``n_refusal_calib`` vs ``n_benign_pca``: the refusal-contrast count and the
-  benign-PCA sample count are NOT necessarily the same set; keep them separate.
-  Paper reports insensitivity from n=10..100; default 100.
-- ``alpha`` is applied to the RAW orthogonal component (do NOT unit-normalize
-  v_perp; that would change what alpha=0.1 means). Enforced by
-  ``MultiLayerAdditiveSteering(normalize=False)``.
+``alpha`` multiplies the RAW orthogonal component — do NOT unit-normalize v_perp,
+which would silently redefine alpha. Enforced by
+``MultiLayerAdditiveSteering(normalize=False)``.
+
+Legacy deviations (why ``legacy_reconstruction`` cannot support a verdict):
+  1. it contrasts **text-only** queries with no audio, not Q=(a,t) vs Q=(a,t+p);
+  2. it pools ``mean_all`` over every sequence token instead of the paper's last
+     token position;
+  3. it steers **all** positions (audio + prompt + generated) instead of the last
+     position, which multiplies the injected norm by the sequence length and
+     collapses generation at the paper's own alpha=0.1.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
+
+SARSteerImplementation = Literal["legacy_reconstruction", "paper_faithful"]
+SARSTEER_IMPLEMENTATIONS = frozenset({"legacy_reconstruction", "paper_faithful"})
+
+
+def sarsteer_system_prompt(implementation: SARSteerImplementation) -> str | None:
+    """System prompt for BOTH arms under a given implementation.
+
+    The undefended and defended arms must be generated under an identical prompt
+    or the contrast is confounded, so every caller resolves it here rather than
+    hardcoding one. The paper prepends no system prompt: §3.2 fixes the textual
+    input to the FigStep instruction alone.
+    """
+
+    if implementation not in SARSTEER_IMPLEMENTATIONS:
+        raise ValueError(f"unsupported SARSteer implementation: {implementation!r}")
+    return None if implementation == "paper_faithful" else "You are a helpful assistant."
+
+
+def sarsteer_position_scope(implementation: SARSteerImplementation) -> str:
+    """Residual-stream position scope for the steering hook.
+
+    ``paper_faithful`` -> ``"last"``: Eq. 2 adds the vector "at each generated
+    token position i", and Algorithm 1 Step 3 updates ``h(Q)``, which §3.3 defines
+    as the last-token activation. Under a KV cache the last position of the
+    prefill forward is the position whose logits emit the first generated token,
+    and every decode forward carries exactly one (generated) position — so
+    steering ``hidden[:, -1, :]`` on every forward pass is precisely that rule.
+    ``legacy_reconstruction`` -> ``"all"`` reproduces the superseded artifacts.
+    """
+
+    if implementation not in SARSTEER_IMPLEMENTATIONS:
+        raise ValueError(f"unsupported SARSteer implementation: {implementation!r}")
+    return "last" if implementation == "paper_faithful" else "all"
+
 
 # ---------------------------------------------------------------------------
 # Pure numpy core (no torch) — unit-testable on CPU.
@@ -92,9 +139,7 @@ def orthogonal_complement(vector: np.ndarray, basis: np.ndarray) -> np.ndarray:
     if vector.ndim != 1:
         raise ValueError(f"vector must be 1-D, got {vector.shape}")
     if basis.ndim != 2 or basis.shape[0] != vector.shape[0]:
-        raise ValueError(
-            f"basis {basis.shape} incompatible with vector dim {vector.shape[0]}"
-        )
+        raise ValueError(f"basis {basis.shape} incompatible with vector dim {vector.shape[0]}")
     v = vector.astype(np.float64)
     u = basis.astype(np.float64)
     projected = u @ (u.T @ v)  # U U^T v
@@ -130,6 +175,35 @@ def save_sarsteer_vectors(path: Path, vectors: dict[int, np.ndarray], meta: dict
     payload["_layers"] = np.asarray(sorted(vectors), dtype=np.int64)
     payload["_meta"] = np.asarray(_encode_meta(meta))
     np.savez_compressed(path, **payload)
+
+
+def load_sarsteer_metadata(path: Path) -> dict[str, Any]:
+    """Load and validate the provenance metadata embedded in a vector bundle."""
+
+    if not path.exists():
+        raise FileNotFoundError(f"Missing SARSteer vectors: {path}")
+    data = np.load(path, allow_pickle=False)
+    if "_meta" not in data:
+        return {}
+    import json
+
+    raw = data["_meta"]
+    try:
+        meta = json.loads(str(raw.item()))
+    except (AttributeError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError(f"invalid SARSteer metadata in {path}: {exc}") from exc
+    if not isinstance(meta, dict):
+        raise ValueError(f"SARSteer metadata in {path} must decode to an object")
+    return meta
+
+
+def resolve_sarsteer_implementation(meta: dict[str, Any]) -> SARSteerImplementation:
+    """Resolve bundle mode, treating pre-mode artifacts as legacy."""
+
+    value = meta.get("implementation") or "legacy_reconstruction"
+    if value not in SARSTEER_IMPLEMENTATIONS:
+        raise ValueError(f"unsupported SARSteer vector implementation metadata: {value!r}")
+    return value
 
 
 def load_sarsteer_vectors(path: Path) -> dict[int, np.ndarray]:
@@ -203,17 +277,21 @@ def extract_text_refusal_vectors(
     system_prompt: str = "You are a helpful assistant.",
     extraction_position: str = "mean_all",
 ) -> dict[int, np.ndarray]:
-    """Per-layer text-derived refusal vector ``mean(harm+refusal) - mean(harm)``.
+    """LEGACY (NOT paper-faithful): text-only refusal contrast. Do not use.
 
-    Pooling (Codex 2026-07-17): ``"mean_all"`` (default) pools each layer's
-    activation over ALL sequence tokens, the literal reading of the paper's Eq. 4
-    ``mu = mean activation of the sequence``. This is NON-degenerate: the
-    harm+refusal arm adds the refusal tokens' contributions on top of the shared
-    query prefix. Do NOT use ``"last_token"`` naively — reading each arm at its own
-    final token contrasts DIFFERENT terminal tokens (refusal identity confounded
-    with the vector), and reading both at the same prefix position is exactly zero
-    under causal attention. ``"last_token"`` is retained only as a control; confirm
-    the exact SARSteer pooling against Appendix A.5 before a confirmatory run.
+    Retained only to reload/reproduce the superseded 2026-07-17 artifacts. Use
+    ``extract_paper_refusal_vectors`` instead. Verified against the paper on
+    2026-07-17 (Claude+Codex, independently), this function deviates three ways:
+
+    1. Both arms are TEXT-ONLY. The paper's Eq. 4 contrasts Q=(a,t) against
+       Q'=(a,t+p) with the SAME harmful audio present in both arms; "text-derived"
+       describes the appended refusal PROMPT, not a text-only query.
+    2. The default ``mean_all`` pools over every sequence token, but §3.3 defines
+       ``h^l(Q)`` as "the activation at the last token position of layer l", and
+       Eq. 4's ``mu`` is the mean over calibration ITEMS of those last-token
+       vectors — not a mean over positions.
+    3. The refusal text is appended AFTER the assistant-generation marker, so the
+       arm is not the paper's ``t + p`` textual instruction either.
     """
     from audio_safety.models.qwen2_audio import (
         build_text_conversation,
@@ -261,7 +339,7 @@ def extract_benign_speech_activations(
     instruction: str,
     *,
     position_name: str = "first_generation_prelogit",
-    system_prompt: str = "You are a helpful assistant.",
+    system_prompt: str | None = "You are a helpful assistant.",
 ) -> dict[int, np.ndarray]:
     """Per-layer benign-speech activation matrices ``(n_samples, d)`` for the PCA.
 
@@ -286,9 +364,10 @@ def extract_benign_speech_activations(
         )
         token_index = resolve_audio_position_indices(processor, conversation)[position_name]
         inputs = prepare_qwen2_audio_inputs(processor, conversation, device=device)
-        with torch.no_grad(), ResidualStreamCapture(
-            model, token_index=token_index, layers=None
-        ) as cap:
+        with (
+            torch.no_grad(),
+            ResidualStreamCapture(model, token_index=token_index, layers=None) as cap,
+        ):
             model(**inputs)
         for ell, state in cap.states().items():
             per_layer.setdefault(ell, []).append(state.numpy().astype(np.float32))
@@ -306,7 +385,8 @@ def generate_audio_response_with_sarsteer(
     vectors: dict[int, np.ndarray],
     alpha: float = 0.1,
     max_new_tokens: int = 256,
-    system_prompt: str = "You are a helpful assistant.",
+    system_prompt: str | None = None,
+    implementation: SARSteerImplementation = "paper_faithful",
     do_sample: bool = False,
 ) -> str:
     """Generate one response with SARSteer steering active at all layers/positions.
@@ -321,17 +401,78 @@ def generate_audio_response_with_sarsteer(
         prepare_qwen2_audio_inputs,
     )
 
+    if implementation not in SARSTEER_IMPLEMENTATIONS:
+        raise ValueError(f"unsupported SARSteer implementation: {implementation!r}")
+
     conversation = build_audio_analysis_conversation(
         audio_path, instruction, system_prompt=system_prompt
     )
     device = model_input_device(model)
     inputs = prepare_qwen2_audio_inputs(processor, conversation, device=device)
     prompt_len = inputs.input_ids.shape[1]
-    with MultiLayerAdditiveSteering(model, vectors=vectors, alpha=alpha, normalize=False):
-        generate_ids = model.generate(
-            **inputs, max_new_tokens=max_new_tokens, do_sample=do_sample
-        )
+    position_scope = sarsteer_position_scope(implementation)
+    with MultiLayerAdditiveSteering(
+        model, vectors=vectors, alpha=alpha, normalize=False, position_scope=position_scope
+    ):
+        generate_ids = model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=do_sample)
     generate_ids = generate_ids[:, prompt_len:]
     return processor.batch_decode(
         generate_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False
     )[0]
+
+
+def extract_paper_refusal_vectors(
+    model: Any,
+    processor: Any,
+    harmful_audio_paths: Sequence[Path | str],
+    instruction: str,
+    *,
+    refusal_text: str = "I cannot assist with that.",
+    system_prompt: str | None = None,
+) -> dict[int, np.ndarray]:
+    """Paper-faithful per-layer refusal vector (Eq. 4 / Algorithm 1 Step 1).
+
+        v_l = mean_i [ h_l(a_i, t + p) - h_l(a_i, t) ]
+
+    Both arms carry the SAME harmful audio ``a_i`` and the same
+    assistant-generation marker; only the textual refusal prompt ``p`` is appended
+    to the fixed instruction ``t``, exactly as Algorithm 1 Step 1 constructs
+    ``Q' = (Q + p)``. Every decoder layer is read at the final prompt token, per
+    §3.3's definition of ``h^l(Q)``.
+    """
+    from audio_safety.models.qwen2_audio import (
+        build_audio_analysis_conversation,
+        model_input_device,
+        prepare_qwen2_audio_inputs,
+    )
+
+    if not instruction:
+        raise ValueError("paper-faithful SARSteer requires a non-empty fixed instruction")
+    if not refusal_text:
+        raise ValueError("paper-faithful SARSteer requires a non-empty refusal_text")
+    device = model_input_device(model)
+    base_sum: dict[int, np.ndarray] = {}
+    refusal_sum: dict[int, np.ndarray] = {}
+    count = 0
+    for audio_path in harmful_audio_paths:
+        base_conversation = build_audio_analysis_conversation(
+            audio_path, instruction, system_prompt=system_prompt
+        )
+        refusal_conversation = build_audio_analysis_conversation(
+            audio_path,
+            instruction + refusal_text,
+            system_prompt=system_prompt,
+        )
+        base_inputs = prepare_qwen2_audio_inputs(processor, base_conversation, device=device)
+        refusal_inputs = prepare_qwen2_audio_inputs(processor, refusal_conversation, device=device)
+        base_states = _capture_pooled_all_layers(model, base_inputs, "last_token")
+        refusal_states = _capture_pooled_all_layers(model, refusal_inputs, "last_token")
+        if base_states.keys() != refusal_states.keys():
+            raise RuntimeError("SARSteer refusal arms captured different decoder layers")
+        for ell, state in base_states.items():
+            base_sum[ell] = base_sum.get(ell, 0.0) + state
+            refusal_sum[ell] = refusal_sum.get(ell, 0.0) + refusal_states[ell]
+        count += 1
+    if count == 0:
+        raise ValueError("no harmful audio provided for refusal-vector extraction")
+    return {ell: (refusal_sum[ell] - base_sum[ell]) / count for ell in base_sum}

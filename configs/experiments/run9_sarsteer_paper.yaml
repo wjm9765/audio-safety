@@ -1,0 +1,51 @@
+# Run 9 SARSteer arm — PAPER-FAITHFUL rebuild (arXiv:2510.17633).
+#
+# Supersedes the legacy_reconstruction runs of 2026-07-17, which deviated from the
+# paper in three ways (text-only contrast, mean_all pooling, all-position steering)
+# and consequently failed the mandatory positive control. Blind Claude+Codex audit
+# against the paper text: outputs/cross_checks/20260717_sarsteer_paper_fidelity.md
+#
+# Direction-finding gate, NOT a design.md §0 gate.
+#
+# FAITHFUL TO THE PAPER (non-negotiable — a deviation here invalidates the arm):
+#   - Eq. 4 refusal contrast: Q=(a,t) vs Q'=(a,t+p), same harmful audio in both arms
+#   - §3.3 readout: last token position of the prompt
+#   - §4.2 safe space: PCA over the PAIRED purified-safe counterparts, k=10
+#   - Eq. 2 injection: raw v_perp, every decoder layer, last position of each
+#     forward pass (= each generated token position), no unit-normalization
+#   - refusal prompt "I cannot assist with that."
+#
+# ADAPTED TO OUR CONDITIONS (documented, never silent):
+#   - Calibration corpus: our figstep_safebench paired renders, not the paper's own
+#     FigStep-audio bundle. n=59 pairs (every pair disjoint from all eval
+#     partitions) vs the paper's 100. The paper reports (Fig. 5a) that n is
+#     insensitive over 10..100. Same-source/disjoint-item calibration is exactly
+#     the paper's own protocol (§3.2).
+#   - Instruction: "Please answer the question in the audio." (from the dataset
+#     config) rather than the paper's FigStep "generate detailed steps" prompt. Our
+#     channel attack's established refusal->compliance flip is DEFINED under our
+#     instruction, so the gate must hold it fixed; it is an experimental condition,
+#     not part of the method. Calibration and eval share it by construction.
+#   - alpha: re-tuned on disjoint dev controls (see run9_sarsteer_paper_alpha_dev).
+#     The paper default 0.1 is the starting anchor, not an imported constant: alpha
+#     multiplies the RAW v_perp, so the effective dose depends on ||v_perp||.
+name: run9_sarsteer_paper
+
+seed: 0
+
+model: configs/models/qwen2_audio.yaml
+paths: configs/paths/default.yaml
+dataset: configs/datasets/audio_rdo_attack_flip.yaml
+
+sarsteer:
+  enabled: true
+  implementation: paper_faithful
+  alpha: 0.1
+  n_pcs: 10
+  refusal_prompt: "I cannot assist with that."
+  benign_position: first_generation_prelogit
+  # 59 evaluation-disjoint paired items (see run9_sarsteer_paper_calib_summary.json).
+  n_refusal_calib: 59
+  n_benign_pca: 59
+  layers: null            # null = every decoder layer, per the paper
+  max_new_tokens: 64

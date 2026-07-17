@@ -409,9 +409,7 @@ class ResidualStreamIntervention:
             if all_positions:
                 raise ValueError("patch_state does not support all_positions")
             if token_index is None or token_index < 0:
-                raise ValueError(
-                    "patch_state requires a non-negative absolute token_index"
-                )
+                raise ValueError("patch_state requires a non-negative absolute token_index")
         else:
             if vector is None:
                 raise ValueError(f"{mode!r} mode requires a vector")
@@ -546,7 +544,7 @@ class ResidualStreamIntervention:
 
 
 class MultiLayerAdditiveSteering:
-    """Add a *distinct* per-layer vector at every position of every forward pass.
+    """Add a distinct per-layer vector at selected positions on every forward pass.
 
     This is the operator SARSteer (arXiv:2510.17633) uses as a defense:
 
@@ -563,11 +561,15 @@ class MultiLayerAdditiveSteering:
        magnitude carries the refusal strength, so normalizing would silently change
        the method. ``normalize`` defaults to ``False`` for that reason; set it True
        only for controls.
-    3. **All-positions by construction.** The vector is added to the whole hidden
-       tensor on every forward pass — the prefill pass and each length-1 KV-cached
-       decode step — so the edit persists across all generated tokens (the Arditi
-       2024 / RDO all-token scope). There is no single-position mode here: a
-       defense that only steered the prefill would miss the KV-cache position bug.
+    3. **Explicit position scope.** ``position_scope="last"`` matches the paper by
+       editing only ``hidden[:, -1, :]``: Eq. 2 steers "each generated token
+       position", and Algorithm 1 Step 3 updates ``h(Q)``, defined in §3.3 as the
+       last-token activation. ``position_scope="all"`` preserves the legacy
+       whole-hidden-tensor behavior, which additionally rewrites every audio and
+       prompt position during prefill — and thus their cached keys/values — an
+       intervention absent from the paper that over-injects by roughly the prompt
+       length. Both modes run on prefill and every length-1 KV-cached decode call,
+       so generated-token steering stays active throughout decoding.
 
     The vectors may be trainable torch tensors; they are not detached.
     """
@@ -579,10 +581,13 @@ class MultiLayerAdditiveSteering:
         vectors: dict[int, Any],
         alpha: float = 0.1,
         normalize: bool = False,
+        position_scope: str = "all",
         eps: float = 1e-12,
     ):
         if not vectors:
             raise ValueError("MultiLayerAdditiveSteering requires at least one layer vector")
+        if position_scope not in {"all", "last"}:
+            raise ValueError("position_scope must be 'all' or 'last'")
         all_layers = get_decoder_layers(model)
         n_layers = len(all_layers)
         self._layer_vectors: list[tuple[int, Any, Any]] = []
@@ -597,6 +602,7 @@ class MultiLayerAdditiveSteering:
         self._alpha = alpha
         self._normalize = normalize
         self._eps = eps
+        self._position_scope = position_scope
         self._handles: list[Any] = []
         self._applied_counts: dict[int, int] = {}
 
@@ -616,8 +622,11 @@ class MultiLayerAdditiveSteering:
                 )
             if self._normalize:
                 vector = vector / torch.clamp(torch.linalg.vector_norm(vector), min=self._eps)
-            # Broadcast add over (batch, time): every position on every forward pass.
-            edited = hidden + self._alpha * vector
+            if self._position_scope == "last":
+                edited = hidden.clone()
+                edited[:, -1, :] = hidden[:, -1, :] + self._alpha * vector
+            else:
+                edited = hidden + self._alpha * vector
             self._applied_counts[layer_idx] = self._applied_counts.get(layer_idx, 0) + 1
             return _replace_hidden_output(output, edited)
 

@@ -1,0 +1,24 @@
+# Run 9 defense-output adjudication only.  The CLI reads the judge block below;
+# model/dataset entries keep this a schema-valid experiment snapshot.
+name: run9_defense_judge
+
+seed: 0
+model: configs/models/qwen2_audio.yaml
+paths: configs/paths/default.yaml
+dataset: configs/datasets/audio_rdo_attack_flip.yaml
+
+conversion_gap:
+  enabled: true
+  judge:
+    # Two independent, modality- and safety-label-blinded judges already verified
+    # in the project OpenRouter pipeline.  A four-way label is emitted only on
+    # unanimous agreement (or an explicit reviewed override).
+    models:
+      - google/gemini-2.5-flash
+      - anthropic/claude-haiku-4.5
+    temperature: 0.0
+    batch_size: 8
+    max_concurrency: 4
+    blind_to_modality: true
+    blind_to_safety_label: true
+    outputs_file: manifests/run9_defense_judge_unused.jsonl

@@ -69,19 +69,22 @@ def build_audio_analysis_conversation(
     audio_path: Path | str,
     instruction: str,
     *,
-    system_prompt: str = "You are a helpful assistant.",
+    system_prompt: str | None = "You are a helpful assistant.",
 ) -> list[dict[str, Any]]:
     """Build the Qwen2-Audio audio-analysis conversation format."""
-    return [
-        {"role": "system", "content": system_prompt},
+    conversation: list[dict[str, Any]] = []
+    if system_prompt is not None:
+        conversation.append({"role": "system", "content": system_prompt})
+    conversation.append(
         {
             "role": "user",
             "content": [
                 {"type": "audio", "audio_url": str(audio_path)},
                 {"type": "text", "text": instruction},
             ],
-        },
-    ]
+        }
+    )
+    return conversation
 
 
 def build_text_conversation(
@@ -314,7 +317,7 @@ def generate_audio_response(
     instruction: str,
     *,
     max_new_tokens: int = 128,
-    system_prompt: str = "You are a helpful assistant.",
+    system_prompt: str | None = "You are a helpful assistant.",
     do_sample: bool = True,
 ) -> str:
     """Run one local Qwen2-Audio audio-analysis generation.

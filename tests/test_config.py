@@ -4,6 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from audio_safety.config import load_experiment_config
+from audio_safety.config.schema import SARSteerConfig
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXP1 = REPO_ROOT / "configs" / "experiments" / "exp1_refusal_cone_drift.yaml"
@@ -90,3 +91,11 @@ def test_unknown_key_rejected(tmp_path: Path):
 def test_bad_override_path_rejected():
     with pytest.raises(KeyError):
         load_experiment_config(EXP1, overrides=["nonexistent.section=1"])
+
+
+def test_sarsteer_implementation_mode_is_explicit_and_fail_closed():
+    # Default is the paper; the legacy mode must be opted into explicitly.
+    assert SARSteerConfig().implementation == "paper_faithful"
+    assert SARSteerConfig(implementation="paper_faithful").implementation == "paper_faithful"
+    with pytest.raises(ValidationError):
+        SARSteerConfig(implementation="latest")

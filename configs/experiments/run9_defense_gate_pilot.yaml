@@ -1,0 +1,24 @@
+# Run 9 SARSteer PILOT on the existing Run 7 phase_frontend audio.
+# Direction-finding only: not the fresh ~350-harmful cohort and not confirmatory.
+name: run9_defense_gate_run7_pilot
+
+seed: 0
+
+model: configs/models/qwen2_audio.yaml
+paths: configs/paths/default.yaml
+dataset: configs/datasets/run9_pilot_phase_frontend.yaml
+
+sarsteer:
+  enabled: true
+  implementation: paper_faithful
+  alpha: 0.1
+  n_pcs: 10
+  refusal_prompt: "I cannot assist with that."
+  extraction_position: mean_all
+  benign_position: first_generation_prelogit
+  # seed=0 and 40/20/40 over n=150 yield 60 disjoint TRAIN calibration pairs.
+  n_refusal_calib: 60
+  n_benign_pca: 60
+  layers: null
+  # Match the source Run 7 response horizon for a right-sized pilot.
+  max_new_tokens: 64
