@@ -1,0 +1,357 @@
+diff --git a/eval_qwen.py b/eval_qwen.py
+index a8f9763..8f8ff69 100644
+--- a/eval_qwen.py
++++ b/eval_qwen.py
+@@ -2,7 +2,6 @@ import os.path
+ from transformers import Qwen2AudioForConditionalGeneration, AutoProcessor
+ from tqdm import tqdm
+ import argparse
+-from eval import attack_performance_eval
+ import pickle
+ from utils import *
+ 
+@@ -56,8 +55,12 @@ def qwen_infer(
+     model_inputs = model.prepare_inputs_for_generation(**inputs)
+ 
+     with torch.no_grad():
+-        audio_feature = model_inputs["input_features"].clone()
+-        new_feature = audio_feature + perturb
++        audio_feature = model_inputs["input_features"].to(
++            device=model.device, dtype=model.dtype
++        )
++        new_feature = audio_feature + perturb.to(
++            device=audio_feature.device, dtype=audio_feature.dtype
++        )
+ 
+         input_embeds = get_input_embeds(
+             model,
+@@ -98,6 +101,10 @@ def main():
+                         help='Path to saved perturbation file')
+     parser.add_argument('--save_path', type=str, default='./results/responses',
+                         help='Directory to save response pickles')
++    parser.add_argument('--score_sroa', action='store_true',
++                        help='Also run the upstream SorryBench SRoA scorer (needs the '
++                             'fine-tuned Mistral judge). Off by default: the Run 9 gate '
++                             'judges responses with its own local agents.')
+     args = parser.parse_args()
+ 
+     # prepare output dir
+@@ -107,8 +114,11 @@ def main():
+     processor = AutoProcessor.from_pretrained(args.model_path)
+     model = Qwen2AudioForConditionalGeneration.from_pretrained(
+         args.model_path,
+-        device_map="auto"
++        device_map="auto",
++        torch_dtype=torch.bfloat16,
++        attn_implementation="sdpa",
+     )
++    model.eval()
+ 
+     # gather audio files
+     audio_list = []
+@@ -142,10 +152,13 @@ def main():
+     with open(response_file, 'wb') as f:
+         pickle.dump(responses, f)
+ 
+-    # compute attack performance
+-    asr = attack_performance_eval(responses)
+     print(f"Results saved to {response_file}")
+-    print(f"SRoA = {asr:.6f}")
++    # Optional upstream SorryBench SRoA scorer (lazy import so a missing judge
++    # model never blocks generation; the Run 9 gate scores responses itself).
++    if args.score_sroa:
++        from eval import attack_performance_eval
++        asr = attack_performance_eval(responses)
++        print(f"SRoA = {asr:.6f}")
+ 
+ if __name__ == '__main__':
+     main()
+diff --git a/main.py b/main.py
+index 3344ee6..f426d1e 100644
+--- a/main.py
++++ b/main.py
+@@ -1,4 +1,9 @@
++import argparse
++import glob
++import hashlib
++import json
+ import os.path
++import re
+ from io import BytesIO
+ from urllib.request import urlopen
+ import librosa
+@@ -143,7 +148,8 @@ def qwen_mel_protection(
+         model,
+         num_epochs,
+         target_text="I'm sorry, but I cannot fulfill this request.",
+-        tau=0.5
++        tau=0.5,
++        max_seconds=None,
+ ):
+     if len(audio_list) > 1:
+         raise ValueError("Only consider single audio clip here!")
+@@ -168,12 +174,16 @@ def qwen_mel_protection(
+     model_inputs = model.prepare_inputs_for_generation(**inputs)
+     model_inputs["input_ids"] = model_inputs["input_ids"].to(model.device)
+     model_inputs["attention_mask"] = model_inputs["attention_mask"].to(model.device)
+-    model_inputs["input_features"] = model_inputs["input_features"].to(model.device)
++    model_inputs["input_features"] = model_inputs["input_features"].to(
++        device=model.device, dtype=model.dtype
++    )
+     model_inputs["feature_attention_mask"] = model_inputs["feature_attention_mask"].to(model.device)
+ 
+     audio_feat = model_inputs["input_features"]
+     if perturb is None:
+-        perturb = torch.zeros_like(audio_feat, requires_grad=True, device=audio_feat.device)
++        perturb = torch.zeros_like(
++            audio_feat, dtype=torch.float32, requires_grad=True, device=audio_feat.device
++        )
+         perturb.data = 0.01 * torch.randn_like(perturb)
+ 
+     optimizer = torch.optim.Adam([perturb], lr=3e-4)
+@@ -181,7 +191,7 @@ def qwen_mel_protection(
+     start_time = time.time()
+ 
+     for epoch in range(num_epochs):
+-        new_feat = audio_feat + perturb
++        new_feat = audio_feat + perturb.to(dtype=audio_feat.dtype)
+         embeds = get_input_embeds(
+             model,
+             model_inputs["input_ids"],
+@@ -195,6 +205,10 @@ def qwen_mel_protection(
+         shift_logits = logits[..., shift - 1:-1, :].contiguous()
+         target_ids = target_ids.to(shift_logits.device)
+         loss = F.cross_entropy(shift_logits.view(-1, shift_logits.size(-1)), target_ids.view(-1))
++        if not torch.isfinite(loss):
++            print(f"[WARN] non-finite loss at step {epoch + 1}; stopping this audio "
++                  "before the optimizer can write NaN into the universal perturbation", flush=True)
++            break
+         grad = torch.autograd.grad(loss, perturb)[0] * mask
+         perturb.grad = grad
+         optimizer.step()
+@@ -206,10 +220,14 @@ def qwen_mel_protection(
+         print(f"Elapsed {elapsed} [{epoch+1}/{num_epochs}] loss = {loss.item():.6f}, Prot Loss = {loss.item(): .6f}")
+         if loss.item() < 0.1:
+             break
++        if max_seconds is not None and (time.time() - start_time) > max_seconds:
++            print(f"[watchdog] per-audio wall-clock cap {max_seconds}s reached at "
++                  f"step {epoch + 1}/{num_epochs}", flush=True)
++            break
+         torch.cuda.empty_cache()
+ 
+     with torch.no_grad():
+-        final_feat = audio_feat + perturb
++        final_feat = audio_feat + perturb.to(dtype=audio_feat.dtype)
+         embeds = get_input_embeds(
+             model,
+             model_inputs["input_ids"],
+@@ -229,6 +247,35 @@ def qwen_mel_protection(
+     return response, record, perturb
+ 
+ 
++def _latest_resume_checkpoint(save_path, num_epochs, n_audios):
++    """Return (linear_step, path) of the furthest completed (epoch, audio) step.
++
++    Universal training is one flat sequence of (epoch, audio) steps saved as
++    ``perturb_mel_epoch_{E}_iter_{I}.pth``.  Because the Adam optimizer is created
++    fresh inside ``qwen_mel_protection`` per audio (no cross-audio optimizer state)
++    and each forward pass is deterministic/greedy, reloading the furthest checkpoint
++    and continuing at the next step reproduces the uninterrupted trajectory EXACTLY
++    under a pure step cap (``max_seconds=None``).  With the wall-clock watchdog the
++    per-audio step count is timing-dependent, so a resumed δ is not bit-reproducible
++    when the watchdog fires — but each audio still saves exactly one checkpoint and
++    the SAP remains a validly-trained artifact.  Returns ``None`` when no usable
++    checkpoint exists.
++    """
++    best = None
++    pattern = re.compile(r"^perturb_mel_epoch_(\d+)_iter_(\d+)\.pth$")
++    for path in glob.glob(os.path.join(save_path, "perturb_mel_epoch_*_iter_*.pth")):
++        match = pattern.match(os.path.basename(path))
++        if not match:
++            continue
++        epoch, audio_index = int(match.group(1)), int(match.group(2))
++        if epoch >= num_epochs or audio_index >= n_audios:
++            continue
++        step = epoch * n_audios + audio_index
++        if best is None or step > best[0]:
++            best = (step, path)
++    return best
++
++
+ def run_universal(audio_file_list,
+                asr_model,
+                save_path,
+@@ -237,10 +284,49 @@ def run_universal(audio_file_list,
+                processor,
+                model,
+                num_epochs,
++               max_iter=3000,
++               max_seconds=None,
++               resume=True,
+ ):
+ 
+     perturb = None
+-    max_iter = 3000
++    n_audios = len(audio_file_list)
++
++    # Bind the checkpoints in save_path to THIS ordered audio set. Resuming into a
++    # save_path that holds checkpoints trained on a different (or re-ordered) audio
++    # set would silently continue a mongrel perturbation that still passes the
++    # count/shape/mask validator. Fail loudly instead. Also records the reduced
++    # schedule so the validator can read num_epochs/max_iter instead of guessing.
++    # family/basename (not bare basename): the three families each contain 0..9.wav,
++    # so a family swap or re-order must change the fingerprint.
++    relpaths = [
++        os.path.join(os.path.basename(os.path.dirname(a)), os.path.basename(a))
++        for a in audio_file_list
++    ]
++    audioset_sha = hashlib.sha256(
++        ("\n".join(relpaths) + f"|n={n_audios}").encode("utf-8")
++    ).hexdigest()
++    run_config = {
++        "audioset_sha256": audioset_sha,
++        "audio_relpaths": relpaths,
++        "n_audios": n_audios,
++        "num_epochs": num_epochs,
++        "max_iter": max_iter,
++        "max_seconds": max_seconds,
++    }
++    config_path = os.path.join(save_path, "sap_run_config.json")
++    if os.path.exists(config_path):
++        with open(config_path) as handle:
++            previous = json.load(handle)
++        if previous.get("audioset_sha256") != audioset_sha:
++            raise SystemExit(
++                f"[resume-guard] {config_path} was written for a DIFFERENT audio set "
++                f"({str(previous.get('audioset_sha256'))[:12]} != {audioset_sha[:12]}); "
++                "use a fresh --save_path or pass --no_resume"
++            )
++    else:
++        with open(config_path, "w") as handle:
++            json.dump(run_config, handle, indent=2)
+ 
+     cache_file = "./mask/global_saliency.npz"
+     avg_j, avg_a, mask1d = load_or_compute_saliency_data(
+@@ -255,31 +341,46 @@ def run_universal(audio_file_list,
+ 
+     mask = mask1d.unsqueeze(0).unsqueeze(2)  # torch.Tensor [1, 128, 1]
+ 
++    start_step = 0
++    if resume:
++        found = _latest_resume_checkpoint(save_path, num_epochs, n_audios)
++        if found is not None:
++            loaded = torch.load(found[1], map_location="cpu")["PTB"]
++            perturb = (
++                loaded.detach().clone().to(device=model.device, dtype=torch.float32)
++                .requires_grad_(True)
++            )
++            start_step = found[0] + 1
++            print(f"[resume] loaded {found[1]}; resuming at linear step "
++                  f"{start_step}/{num_epochs * n_audios}", flush=True)
++
++    total_steps = num_epochs * n_audios
++    responses = []
++    records = []
++    for step in range(start_step, total_steps):
++        epoch, i = divmod(step, n_audios)
++        audio = audio_file_list[i]
++        print(f'Universal step {step + 1}/{total_steps} '
++              f'(epoch {epoch + 1}/{num_epochs}, audio {i + 1}/{n_audios})', flush=True)
++        response, record, perturb = qwen_mel_protection(
++            [audio], perturb, mask, processor, model, max_iter, max_seconds=max_seconds
++        )
++        print(f'Example {i}:\n{response}')
++        responses.append(response)
++        records.append(record)
++        path = os.path.join(save_path, f'perturb_mel_epoch_{epoch}_iter_{i}.pth')
++        tensor_dict = {'PTB': perturb}
++        torch.save(tensor_dict, path)
+ 
+-    for epoch in range(num_epochs):
+-        responses = []
+-        records = []
+-        print(f'Universal Training Epoch {epoch + 1}/{num_epochs}')
+-        for i, audio in enumerate(audio_file_list):
+-            print(f'  Processing audio {i + 1}/{len(audio_file_list)}')
+-            print(f'      perturb = {perturb}')
+-            response, record, perturb = qwen_mel_protection([audio], perturb, mask, processor, model, max_iter)
+-            print(f'Example {i}:\n{response}')
+-            responses.append(response)
+-            records.append(record)
+-            # print(record)
+-            path = os.path.join(save_path, f'perturb_mel_epoch_{epoch}_iter_{i}.pth')
+-            tensor_dict = {'PTB': perturb}
+-            torch.save(tensor_dict, path)
+-
+-            with open(os.path.join(save_path, response_save_path), 'wb') as f:
+-                pickle.dump(responses, f)
+-            with open(os.path.join(save_path, record_save_path), 'wb') as f:
+-                pickle.dump(records, f)
++        with open(os.path.join(save_path, response_save_path), 'wb') as f:
++            pickle.dump(responses, f)
++        with open(os.path.join(save_path, record_save_path), 'wb') as f:
++            pickle.dump(records, f)
+ 
+ 
+ def main():
+     parser = argparse.ArgumentParser(description="Run Prot Qwen pipeline")
++    parser.add_argument('--prefix', type=str, default='almguard', help='Output filename prefix')
+     parser.add_argument('--save_path', type=str, default='./results/prot_qwen',
+                         help='Directory to save results')
+     parser.add_argument('--wav_dirs', nargs=3, metavar=('DIR1','DIR2','DIR3'),
+@@ -291,8 +392,17 @@ def main():
+                         help='Path to pretrained Qwen2-Audio model')
+     parser.add_argument('--asr_path', type=str, default='./models/large-v3.pt',
+                         help='Path to pretrained Whisper model')
++    parser.add_argument('--max_iter', type=int, default=3000,
++                        help='Per-audio inner optimization step cap (paper default 3000)')
++    parser.add_argument('--max_seconds', type=float, default=None,
++                        help='Per-audio wall-clock watchdog in seconds; None keeps the step cap only')
++    parser.add_argument('--no_resume', action='store_true',
++                        help='Disable resume from existing SAP checkpoints in --save_path')
++    parser.add_argument('--seed', type=int, default=0,
++                        help='Torch seed for the step-0 perturbation init (reproducibility)')
+ 
+     args = parser.parse_args()
++    torch.manual_seed(args.seed)
+ 
+     # prepare directories
+     os.makedirs(args.save_path, exist_ok=True)
+@@ -310,11 +420,21 @@ def main():
+     processor = AutoProcessor.from_pretrained(args.model_path)
+     model = Qwen2AudioForConditionalGeneration.from_pretrained(
+         args.model_path,
+-        device_map="auto"
++        device_map="auto",
++        torch_dtype=torch.bfloat16,
++        attn_implementation="sdpa",
+     )
+-    # asr_model = None
+-    asr_model = whisper.load_model(args.asr_path)
+-    asr_model.to("cuda:0")
++    model.eval()
++    model.requires_grad_(False)
++
++    saliency_cache = "./mask/global_saliency.npz"
++    if os.path.exists(saliency_cache):
++        # The cached branch of load_or_compute_saliency_data never reads the
++        # ASR model. Avoid keeping Whisper large-v3 on the A40 unnecessarily.
++        asr_model = None
++    else:
++        asr_model = whisper.load_model(args.asr_path)
++        asr_model.to("cuda:0")
+ 
+     # prepare output filenames
+     today_date = datetime.datetime.now().strftime('%m%d')
+@@ -330,7 +450,10 @@ def main():
+         record_save_path,
+         processor,
+         model,
+-        args.num_epochs
++        args.num_epochs,
++        max_iter=args.max_iter,
++        max_seconds=args.max_seconds,
++        resume=not args.no_resume,
+     )
+ 
+ if __name__ == '__main__':

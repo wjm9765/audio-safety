@@ -95,10 +95,21 @@ print(json.dumps({
 
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
-    if args.num_epochs < 1:
-        raise SystemExit("--num-epochs must be >= 1")
     if args.tau <= 0:
         raise SystemExit("--tau must be positive")
+    # Prefer the schedule the training run recorded (reduced budget) so a 3-epoch SAP
+    # validates without a manual --num-epochs; fall back to the CLI value otherwise.
+    run_config_path = args.sap_dir.resolve() / "sap_run_config.json"
+    if run_config_path.is_file():
+        run_config = json.loads(run_config_path.read_text(encoding="utf-8"))
+        num_epochs = int(run_config.get("num_epochs", args.num_epochs))
+        num_epochs_source = "sap_run_config.json"
+    else:
+        run_config = None
+        num_epochs = args.num_epochs
+        num_epochs_source = "--num-epochs"
+    if num_epochs < 1:
+        raise SystemExit("resolved num_epochs must be >= 1")
     root = args.almguard_root.resolve()
     repo = root / "ALMGuard"
     python = root / "venv" / "bin" / "python"
@@ -130,7 +141,7 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit("shipped Qwen mask must have shape (128,) and k=48")
 
     train_total = int(contract["train_total"])
-    expected_name = f"perturb_mel_epoch_{args.num_epochs - 1}_iter_{train_total - 1}.pth"
+    expected_name = f"perturb_mel_epoch_{num_epochs - 1}_iter_{train_total - 1}.pth"
     checkpoint = (
         args.checkpoint.resolve()
         if args.checkpoint is not None
@@ -142,7 +153,7 @@ def main(argv: list[str] | None = None) -> None:
         )
     if not checkpoint.is_file():
         raise SystemExit(f"final SAP checkpoint not found: {checkpoint}")
-    expected_count = args.num_epochs * train_total
+    expected_count = num_epochs * train_total
     checkpoints = list(args.sap_dir.resolve().glob("perturb_mel_epoch_*_iter_*.pth"))
     if len(checkpoints) != expected_count:
         raise SystemExit(
@@ -154,7 +165,9 @@ def main(argv: list[str] | None = None) -> None:
         "schema_version": 1,
         "upstream_commit": actual_commit,
         "train_total": train_total,
-        "num_epochs": args.num_epochs,
+        "num_epochs": num_epochs,
+        "num_epochs_source": num_epochs_source,
+        "sap_run_config": run_config,
         "checkpoint_count": len(checkpoints),
         "final_checkpoint": str(checkpoint),
         "final_checkpoint_sha256": _sha256(checkpoint),

@@ -67,7 +67,7 @@ def test_mask_contract_shape_and_count_fixture(tmp_path):
 
 
 def test_cli_rejects_invalid_epoch_or_tau():
-    with pytest.raises(SystemExit, match="num-epochs"):
+    with pytest.raises(SystemExit, match="num_epochs must be"):
         SCRIPT.main(
             [
                 "--prepared-root",

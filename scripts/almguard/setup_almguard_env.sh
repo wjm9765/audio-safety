@@ -41,40 +41,31 @@ git -C "${REPO_DIR}" fetch --all --tags
 git -C "${REPO_DIR}" checkout "${ALMGUARD_COMMIT}"
 echo "[almguard] checked out $(git -C "${REPO_DIR}" rev-parse --short HEAD)"
 
-# The pinned upstream main.py reads args.prefix when naming response pickle files
-# but never declares that CLI argument. Add a defaulted, filename-only argument.
-# This is deliberately applied to the isolated clone (never the upstream source
-# or our wrapper), is idempotent, and does not touch SAP training semantics.
+# All Run 9 fidelity-neutral adaptations to the pinned upstream artifact are captured
+# in ONE reproducible patch (supersedes the earlier piecemeal argparse/--prefix/bf16
+# edits, whose hunks it now contains). Scope:
+#   (1) CLI defects: import argparse; declare the defaulted filename-only --prefix.
+#   (2) A40 runtime: explicit BF16+SDPA; no unused Whisper resident when the shipped
+#       saliency cache is present.
+#   (3) Budget/schedule knobs: --max_iter and --num_epochs pass-through, universal-SAP
+#       resume from per-step checkpoints, and a per-audio wall-clock watchdog. The SAP
+#       OBJECTIVE is unchanged — mask k=48, tau=0.5, lr=3e-4, unified safe target, one
+#       universal Mel perturbation. Only the training schedule/budget can be reduced.
+#   (4) The upstream SorryBench SRoA scorer is made optional (--score_sroa) so a missing
+#       judge model never blocks generation; the Run 9 gate scores responses itself.
+# The older patches/a40_bf16_cached_mask.patch is retained for provenance only.
 MAIN_PY="${REPO_DIR}/main.py"
-if grep -q 'argparse\.ArgumentParser' "${MAIN_PY}" && ! grep -Eq '^import argparse([[:space:]]|$)' "${MAIN_PY}"; then
-  sed -i '1i import argparse' "${MAIN_PY}"
-  echo "[almguard] patched upstream main.py: imported argparse for its CLI parser"
-fi
-if grep -q 'argparse\.ArgumentParser' "${MAIN_PY}" && ! grep -Eq '^import argparse([[:space:]]|$)' "${MAIN_PY}"; then
-  echo "ERROR: upstream main.py still uses argparse without importing it" >&2
-  exit 3
-fi
-if grep -q 'args\.prefix' "${MAIN_PY}" && ! grep -q "add_argument('--prefix'" "${MAIN_PY}"; then
-  sed -i "/parser = argparse.ArgumentParser/a\\    parser.add_argument('--prefix', type=str, default='almguard', help='Output filename prefix')" "${MAIN_PY}"
-  echo "[almguard] patched upstream main.py: declared filename-only --prefix"
-fi
-if grep -q 'args\.prefix' "${MAIN_PY}" && ! grep -q "add_argument('--prefix'" "${MAIN_PY}"; then
-  echo "ERROR: upstream main.py still references undefined args.prefix" >&2
-  exit 3
-fi
-# A40 runtime patch: explicit BF16+SDPA and no unused Whisper resident when the
-# shipped saliency cache is present. SAP objective/hyperparameters are unchanged.
-A40_PATCH="${SCRIPT_DIR}/patches/a40_bf16_cached_mask.patch"
-if git -C "${REPO_DIR}" apply --reverse --check "${A40_PATCH}" >/dev/null 2>&1; then
-  echo "[almguard] A40 BF16/cached-mask runtime patch already applied"
-elif git -C "${REPO_DIR}" apply --check "${A40_PATCH}"; then
-  git -C "${REPO_DIR}" apply "${A40_PATCH}"
-  echo "[almguard] applied A40 BF16/cached-mask runtime patch"
-else
-  echo "ERROR: A40 runtime patch does not apply cleanly to pinned ALMGuard" >&2
-  exit 3
-fi
 EVAL_QWEN_PY="${REPO_DIR}/eval_qwen.py"
+RUNTIME_PATCH="${SCRIPT_DIR}/patches/run9_almguard_runtime.patch"
+if git -C "${REPO_DIR}" apply --reverse --check "${RUNTIME_PATCH}" >/dev/null 2>&1; then
+  echo "[almguard] Run 9 runtime patch already applied"
+elif git -C "${REPO_DIR}" apply --check "${RUNTIME_PATCH}"; then
+  git -C "${REPO_DIR}" apply "${RUNTIME_PATCH}"
+  echo "[almguard] applied Run 9 runtime patch (CLI + BF16/cached-mask + budget/resume/watchdog + optional SRoA)"
+else
+  echo "ERROR: Run 9 runtime patch does not apply cleanly to pinned ALMGuard" >&2
+  exit 3
+fi
 "${PY}" -m py_compile "${MAIN_PY}" "${EVAL_QWEN_PY}"
 
 VENV="${ALMGUARD_ROOT}/venv"

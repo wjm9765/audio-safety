@@ -63,6 +63,23 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--adv-dirs", type=Path, nargs="*", default=[], help="adversarial wav dirs")
     p.add_argument("--sap-out", type=Path, help="SAP save dir (train mode)")
     p.add_argument("--asr-path", type=str, default="./models/large-v3.pt")
+    # Budget knobs (train mode). Method stays paper-standard; only the training
+    # schedule/budget adapts. Defaults None -> upstream paper defaults (10 epochs,
+    # 3000-step cap, resume on).
+    p.add_argument("--num-epochs", type=int, default=None, help="train: outer epochs (upstream 10)")
+    p.add_argument("--max-iter", type=int, default=None, help="train: per-audio step cap (upstream 3000)")
+    p.add_argument(
+        "--max-seconds",
+        type=float,
+        default=None,
+        help="train: per-audio wall-clock watchdog in seconds (None keeps step cap only)",
+    )
+    p.add_argument(
+        "--no-resume",
+        action="store_true",
+        help="train: disable resume from existing SAP checkpoints in --sap-out",
+    )
+    p.add_argument("--seed", type=int, default=None, help="train: torch seed for the SAP init")
     p.add_argument(
         "--assert-excludes",
         type=str,
@@ -220,6 +237,16 @@ def main() -> None:
         "--wav_dirs",
         *[str(Path(d).resolve()) for d in args.adv_dirs],
     ]
+    if args.num_epochs is not None:
+        cmd += ["--num_epochs", str(args.num_epochs)]
+    if args.max_iter is not None:
+        cmd += ["--max_iter", str(args.max_iter)]
+    if args.max_seconds is not None:
+        cmd += ["--max_seconds", str(args.max_seconds)]
+    if args.no_resume:
+        cmd += ["--no_resume"]
+    if args.seed is not None:
+        cmd += ["--seed", str(args.seed)]
     print(f"[almguard] train SAP: {' '.join(cmd)} (cwd={repo})", flush=True)
     subprocess.run(cmd, cwd=repo, check=True)
     print(f"[almguard] SAP checkpoints under {args.sap_out}", flush=True)
