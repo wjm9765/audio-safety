@@ -543,3 +543,100 @@ class ResidualStreamIntervention:
         at prefill, skipped on every cached decode step). Callers should assert it.
         """
         return self._applied_count
+
+
+class MultiLayerAdditiveSteering:
+    """Add a *distinct* per-layer vector at every position of every forward pass.
+
+    This is the operator SARSteer (arXiv:2510.17633) uses as a defense:
+
+        h'_ell = h_ell + alpha * v_ell   at all layers, all generated positions.
+
+    It differs from ``ResidualStreamIntervention`` in three deliberate ways, all
+    required for a faithful SARSteer reproduction:
+
+    1. **Per-layer vectors.** SARSteer steers every decoder block with its own
+       ``v_ell``, not one shared direction. ``vectors`` maps ``layer_idx -> vector``.
+    2. **No implicit unit-normalization.** ``ResidualStreamIntervention`` divides the
+       vector by its norm, which turns ``alpha`` into a fixed absolute step size.
+       SARSteer applies ``alpha`` to the *raw* orthogonal component ``v_perp`` whose
+       magnitude carries the refusal strength, so normalizing would silently change
+       the method. ``normalize`` defaults to ``False`` for that reason; set it True
+       only for controls.
+    3. **All-positions by construction.** The vector is added to the whole hidden
+       tensor on every forward pass — the prefill pass and each length-1 KV-cached
+       decode step — so the edit persists across all generated tokens (the Arditi
+       2024 / RDO all-token scope). There is no single-position mode here: a
+       defense that only steered the prefill would miss the KV-cache position bug.
+
+    The vectors may be trainable torch tensors; they are not detached.
+    """
+
+    def __init__(
+        self,
+        model: Any,
+        *,
+        vectors: dict[int, Any],
+        alpha: float = 0.1,
+        normalize: bool = False,
+        eps: float = 1e-12,
+    ):
+        if not vectors:
+            raise ValueError("MultiLayerAdditiveSteering requires at least one layer vector")
+        all_layers = get_decoder_layers(model)
+        n_layers = len(all_layers)
+        self._layer_vectors: list[tuple[int, Any, Any]] = []
+        for layer_idx, vector in vectors.items():
+            if layer_idx < 0 or layer_idx >= n_layers:
+                raise IndexError(
+                    f"layer index {layer_idx} out of range for {n_layers} decoder layers"
+                )
+            if vector is None:
+                raise ValueError(f"vector for layer {layer_idx} is None")
+            self._layer_vectors.append((layer_idx, all_layers[layer_idx], vector))
+        self._alpha = alpha
+        self._normalize = normalize
+        self._eps = eps
+        self._handles: list[Any] = []
+        self._applied_counts: dict[int, int] = {}
+
+    def _make_hook(self, layer_idx: int, raw_vector: Any):
+        def hook(module: Any, inputs: Any, output: Any) -> Any:
+            import torch
+
+            hidden = output[0] if isinstance(output, tuple) else output
+            if torch.is_tensor(raw_vector):
+                vector = raw_vector.to(device=hidden.device, dtype=hidden.dtype)
+            else:
+                vector = torch.as_tensor(raw_vector, device=hidden.device, dtype=hidden.dtype)
+            if vector.ndim != 1 or vector.shape[0] != hidden.shape[-1]:
+                raise ValueError(
+                    f"layer {layer_idx} steering vector dim {tuple(vector.shape)} "
+                    f"!= hidden dim {hidden.shape[-1]}"
+                )
+            if self._normalize:
+                vector = vector / torch.clamp(torch.linalg.vector_norm(vector), min=self._eps)
+            # Broadcast add over (batch, time): every position on every forward pass.
+            edited = hidden + self._alpha * vector
+            self._applied_counts[layer_idx] = self._applied_counts.get(layer_idx, 0) + 1
+            return _replace_hidden_output(output, edited)
+
+        return hook
+
+    def __enter__(self) -> "MultiLayerAdditiveSteering":
+        self._applied_counts = {}
+        self._handles = [
+            layer.register_forward_hook(self._make_hook(layer_idx, vector))
+            for layer_idx, layer, vector in self._layer_vectors
+        ]
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        for handle in self._handles:
+            handle.remove()
+        self._handles = []
+
+    @property
+    def applied_counts(self) -> dict[int, int]:
+        """Forward-pass application count per layer (prefill + each decode step)."""
+        return dict(self._applied_counts)

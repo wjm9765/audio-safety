@@ -594,6 +594,35 @@ class PitchRepresentationConfig(StrictModel):
     overwrite: bool = False
 
 
+class SARSteerConfig(StrictModel):
+    """Faithful SARSteer defense (arXiv:2510.17633) for the Run 9 defense gate.
+
+    Inference-time refusal-subspace steering, implemented in-house (no code was
+    released). Not a §0 gate; direction-finding defense probe. Fidelity NOTE
+    (Codex 2026-07-17): ``extraction_position`` and the calibration counts are the
+    paper's under-specified knobs — confirm against SARSteer Appendix A.5 before a
+    confirmatory run. ``alpha`` multiplies the RAW orthogonal component (steering
+    uses ``normalize=False``); do not unit-normalize.
+    """
+
+    enabled: bool = False
+    alpha: float = 0.1
+    n_pcs: int = 10
+    refusal_prompt: str = "I cannot assist with that."
+    # How per-layer activations are pooled for the refusal contrast: "mean_all"
+    # (literal Eq. 4, non-degenerate) or "last_token" (control only; confounded).
+    extraction_position: str = "mean_all"
+    # Position at which benign-speech activations are read for the safe-space PCA.
+    benign_position: str = "first_generation_prelogit"
+    n_refusal_calib: int = 100
+    n_benign_pca: int = 100
+    # None = every decoder layer (SARSteer steers all layers).
+    layers: list[int] | None = None
+    max_new_tokens: int = 256
+    vectors_file: Path = Path("sarsteer_vectors.npz")
+    report_file: Path = Path("sarsteer_gate_report.json")
+
+
 class ExperimentConfig(StrictModel):
     name: str
     seed: int = 0
@@ -621,6 +650,9 @@ class ExperimentConfig(StrictModel):
 
     # Run 5 exploratory pitch-only encoder/projector/LLM representation scan.
     pitch_representation: PitchRepresentationConfig | None = None
+
+    # Run 9 defense gate: faithful SARSteer defense probe. Optional/off by default.
+    sarsteer: SARSteerConfig | None = None
 
     # Legacy cone-drift fields remain optional so old analysis helpers can still be
     # imported while exp1 moves to the Audio-RDO gate.

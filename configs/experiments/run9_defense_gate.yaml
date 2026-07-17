@@ -1,0 +1,32 @@
+# Run 9 defense gate: does the content-preserving channel attack survive published
+# LALM defenses? Direction-finding (NOT a §0 gate). See
+# docs/experiments/exp1_refusal_cone_drift/run9_advisor_defense_gate_direction_20260717.md
+#
+# This config drives the SARSteer arm (faithful in-house reimplementation, our
+# env). ALMGuard runs in its OWN isolated venv (scripts/almguard/), interfaced by
+# files — it is NOT configured here because it cannot share this torch/transformers
+# stack (see the direction doc + outputs/cross_checks/20260716... dependency notes).
+name: run9_defense_gate
+
+seed: 0
+
+model: configs/models/qwen2_audio.yaml
+paths: configs/paths/default.yaml
+# Reuse the attack-flip cohort (neutral clean + attack styles). Point at the
+# expanded SafeBench manifest when the fresh cohort is rendered.
+dataset: configs/datasets/audio_rdo_attack_flip.yaml
+
+# Faithful SARSteer defense (arXiv:2510.17633). FIDELITY NOTE (Codex 2026-07-17):
+# confirm extraction_position + calibration counts against SARSteer Appendix A.5
+# before any confirmatory run. alpha multiplies the RAW orthogonal component.
+sarsteer:
+  enabled: true
+  alpha: 0.1
+  n_pcs: 10
+  refusal_prompt: "I cannot assist with that."
+  extraction_position: mean_all   # literal Eq.4 pooling; "last_token" is confounded (control only)
+  benign_position: first_generation_prelogit
+  n_refusal_calib: 100
+  n_benign_pca: 100
+  layers: null            # null = all decoder layers (SARSteer steers every layer)
+  max_new_tokens: 256

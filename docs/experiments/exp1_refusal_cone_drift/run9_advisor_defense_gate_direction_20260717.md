@@ -130,7 +130,37 @@ as a direction signal — subject only to the two non-negotiables above.
 3. ALMGuard SAP training set: substitute (ICA/PAP, recommended start) vs faithful (AdvWave/PAIR, later).
 4. Over-refusal set: SafeBench soft-topics + paired benign vs + AOR-Bench (audio) for a cleaner measure.
 
+## Implementation status (2026-07-17)
+
+Both defenses are coded (local; not yet run — GPU pending) and reviewed:
+
+- **SARSteer (faithful, our env):** `src/audio_safety/pipelines/sarsteer.py` (per-layer
+  text refusal vector, benign-speech PCA safe-space, orthogonal projection),
+  `MultiLayerAdditiveSteering` in `models/hooks.py` (all-layer/all-position, **no**
+  unit-normalize), `SARSteerConfig`, `scripts/build_sarsteer_defense.py` +
+  `apply_sarsteer_defense.py`, `configs/experiments/run9_defense_gate.yaml`,
+  `tests/test_sarsteer.py`. Codex verdict: **core-faithful enough for the gate**; a
+  "survives SARSteer" claim is credible. Refusal-vector pooling defaulted to
+  `mean_all` (literal Eq. 4) after Codex flagged a naive last-token contrast as
+  confounded.
+- **ALMGuard (isolated, faithful algorithm):** `scripts/almguard/` (pinned-commit
+  setup, subprocess wrapper driving their CLI, `pipelines/almguard_io.py` for
+  alignment/guard logic, `tests/test_almguard_io.py`). Published hyperparameters
+  unchanged. Codex verdict: **"ALMGuard-style", NOT the published defense** — the SAP
+  is trained on substitute attacks (ICA/PAP), reproducing 0/3 named families; it is
+  **supporting evidence only** and needs a positive control (SAP must suppress its own
+  training-family held-out attacks, CI excludes 0). A STRONG verdict requires an
+  official-recipe (AdvWave/PAIR or official checkpoint/data) ALMGuard arm.
+
+**Consequence for the verdict:** SARSteer can count toward "survives published
+defenses"; the current ALMGuard arm is supporting until the official-recipe SAP +
+positive control land. `research-code-reviewer` fixed a would-be-silent
+response→row misalignment (zero-padded staged filenames) before it could scramble the
+survival set. `uv run pytest` = 167 passed; ruff clean.
+
 ## Changelog
 
 - 2026-07-17: created. Advisor gate, dual-agent designed (Codex `gpt-5.6-sol` `xhigh` + Claude Opus 4.8).
   Does NOT edit `design.md` §0 or any prior run's registered criteria.
+- 2026-07-17: added implementation-status section after coding both defenses + Codex
+  faithfulness review + research-code-reviewer pass. No §0 change.
