@@ -87,9 +87,12 @@ and it needs an audio-safety training set we lack. Only revisit if a reviewer de
   ALMGuard's SAP-training domain → overlap bias).
 - **Clean harmful audio:** CosyVoice2 TTS of the ~350 harmful (existing batch path). The **channel attack is a
   DSP transform of the clean audio** (phase-vocoder) — **no extra TTS**.
-- **ALMGuard SAP training audios:** reuse existing **ICA / PAP** renders that actually jailbreak Qwen2-Audio
-  (+ optionally cheap PAIR-Audio via API). **Excludes the channel attack.** Substitute path is honest as
-  "ALMGuard-style SAP trained on {reproducible attacks}"; faithful AdvWave/PAIR training is a paper-run upgrade.
+- **ALMGuard SAP training audios:** their algorithm + OUR adversarial audios is a faithful ALMGuard instance
+  (exact AdvWave/PAIR not required). Train on a **diverse set that INCLUDES acoustic jailbreaks** — ICA/PAP
+  (linguistic) **plus our own other DSP attacks** (other pitch/tempo/noise/EQ ops), **EXCLUDING the exact
+  channel/phase op under test**. Two conditions make the survival number credible: a **positive control** (SAP
+  demonstrably suppresses its training attacks, CI∌0) and **domain-adequate** training (acoustic attacks
+  present, so a failure is not dismissible as out-of-domain). Official AdvWave/PAIR is an optional replication.
 - **Benign:** a control set (~150–200) suffices — **not** a 1:1 pair for all 350 — for the over-refusal
   measure + SARSteer's benign-speech safe-space. General benign speech (LibriSpeech / AIR-Bench-Chat) for
   ALMGuard's utility (WER / RQS). Existing OpenRouter (`z-ai/glm-5.2`) + CosyVoice2 path renders paired benign.
@@ -127,7 +130,8 @@ as a direction signal — subject only to the two non-negotiables above.
 
 1. Harmful source: SafeBench-only vs + a 2nd source (multi-source recommended for the paper, optional for the gate).
 2. Category held-out (train on some topics, eval on unseen) — strengthens generalization if adopted.
-3. ALMGuard SAP training set: substitute (ICA/PAP, recommended start) vs faithful (AdvWave/PAIR, later).
+3. ALMGuard SAP training set: diverse acoustic-inclusive (ICA/PAP + our other DSP ops, excl. tested op;
+   recommended) + positive control; official AdvWave/PAIR = optional replication.
 4. Over-refusal set: SafeBench soft-topics + paired benign vs + AOR-Bench (audio) for a cleaner measure.
 
 ## Implementation status (2026-07-17)
@@ -146,17 +150,21 @@ Both defenses are coded (local; not yet run — GPU pending) and reviewed:
 - **ALMGuard (isolated, faithful algorithm):** `scripts/almguard/` (pinned-commit
   setup, subprocess wrapper driving their CLI, `pipelines/almguard_io.py` for
   alignment/guard logic, `tests/test_almguard_io.py`). Published hyperparameters
-  unchanged. Codex verdict: **"ALMGuard-style", NOT the published defense** — the SAP
-  is trained on substitute attacks (ICA/PAP), reproducing 0/3 named families; it is
-  **supporting evidence only** and needs a positive control (SAP must suppress its own
-  training-family held-out attacks, CI excludes 0). A STRONG verdict requires an
-  official-recipe (AdvWave/PAIR or official checkpoint/data) ALMGuard arm.
+  unchanged. **Refined faithfulness verdict (PI-approved 2026-07-17):** their
+  algorithm + OUR adversarial data is a faithful ALMGuard instance — the exact
+  AdvWave/PAIR audios are NOT required. A survival number is credible iff **(1) a
+  positive control** passes (SAP demonstrably suppresses its training attacks, CI∌0)
+  **and (2) the training set is domain-adequate** (includes acoustic jailbreaks — our
+  own other DSP ops, excluding the tested channel/phase op — so a failure is not
+  dismissible as out-of-domain). With both, this arm CAN support STRONG alongside
+  SARSteer; the official AdvWave/PAIR recipe is an optional replication, not a
+  requirement. Name it "ALMGuard (our-data-trained SAP)".
 
-**Consequence for the verdict:** SARSteer can count toward "survives published
-defenses"; the current ALMGuard arm is supporting until the official-recipe SAP +
-positive control land. `research-code-reviewer` fixed a would-be-silent
-response→row misalignment (zero-padded staged filenames) before it could scramble the
-survival set. `uv run pytest` = 167 passed; ruff clean.
+**Consequence for the verdict:** with the positive control + domain-adequate
+(acoustic-inclusive) training, BOTH defenses can count toward "survives published
+defenses." `research-code-reviewer` fixed a would-be-silent response→row
+misalignment (zero-padded staged filenames) before it could scramble the survival
+set. `uv run pytest` = 167 passed; ruff clean.
 
 ## Changelog
 
@@ -164,3 +172,8 @@ survival set. `uv run pytest` = 167 passed; ruff clean.
   Does NOT edit `design.md` §0 or any prior run's registered criteria.
 - 2026-07-17: added implementation-status section after coding both defenses + Codex
   faithfulness review + research-code-reviewer pass. No §0 change.
+- 2026-07-17 (PI-approved refinement): ALMGuard faithfulness re-scoped — their algorithm
+  + our adversarial data IS a faithful instance; the exact AdvWave/PAIR recipe is NOT
+  required. A survival number counts iff a positive control passes AND the SAP training
+  set is domain-adequate (includes acoustic jailbreaks, excludes the tested op). Both
+  defenses can then support STRONG. No §0 change.
