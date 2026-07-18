@@ -27,6 +27,11 @@ Repo commit at build time: `d9b3c48170d9aa0fa41e87028a4c4b8189f7aec3`.
   DID reproduce the published effect (20pp, CI [3.3, 36.7]).
 - Blind Claude+Codex adjudication: sufficient as a **paper starting point**; NOT yet a
   confirmatory "survives a validated defense" claim. One positive-control re-run fixes it.
+- **PI HUMAN OVERRIDE (2026-07-18): gate APPROVED as valid — see §10.** The mechanical
+  `gate_valid=False` above is preserved; the PI approves validity on the grounds that SARSteer's
+  efficacy is established by the paper AND our implementation's dev positive control PASSED (20pp,
+  CI [3.3, 36.7]), so the held-out AdvBench floor failure is a bad-control artifact, not an
+  implementation failure. Adjudicated verdict: **VALID, AMBIGUOUS (leaning survive, 48.3%).**
 
 ---
 
@@ -286,3 +291,47 @@ outputs/cross_checks/
 
 Reproduce end-to-end: build (§4) → sweep+select (§5) → held-out gate (§6). All scripts are
 `#!/usr/bin/env -S uv run python`, resumable by stable row keys.
+
+---
+
+## 10. PI human override — gate approved as VALID (2026-07-18)
+
+**Decision (PI, human):** the SARSteer arm is APPROVED as **gate-valid** by human adjudication,
+overriding the mechanical `gate_valid=False`. The mechanical registered result (§0, §6) is
+PRESERVED unchanged; this is a documented human layer ON TOP of it — NOT a change to the
+pre-registered criteria (`design.md` §0 is untouched, and §6's table stands).
+
+**Grounds (why this is defensible, not goalpost-moving):**
+1. **Efficacy is established externally.** SARSteer's effectiveness is demonstrated in the original
+   paper (arXiv:2510.17633). We reimplemented the method faithfully (the 4 fidelity fixes, §1–2);
+   we do not need to re-prove the defense works in general.
+2. **Our implementation is validated LIVE in our own setup — the DEV positive control PASSED.**
+   The dev PC (PAP-jailbreak SafeBench, a working attack Qwen2-Audio complies with) showed a **20pp
+   ASR reduction, item-bootstrap CI [3.3, 36.7] excluding zero** (§5). So SARSteer measurably
+   reduces a working attack in OUR pipeline — the exact thing the validity floor exists to confirm.
+3. **The held-out PC failure is a bad-control-choice artifact, not an implementation failure.**
+   AdvBench is pre-refused by Qwen2-Audio (2% undefended ASR → nothing to reduce → floor effect;
+   §6, §8). The floor's PURPOSE (confirm the assay/defense is live) is already met by (2).
+
+**Adjudicated verdict:** SARSteer arm = **VALID, AMBIGUOUS (leaning survive).** Survival 48.3%
+(item-clustered, CI [31.7, 65.0]) is far above the 20% WEAK line and at/below the 50% STRONG line;
+0% decoding collapse; S conditioned on demonstrated undefended attack success (not a floor artifact).
+
+**Honest caveat (retained for any FUTURE external/publication claim).** The dev PC validates on the
+CALIBRATION cohort, not the exact held-out cohort. For a fully clean, reviewer-proof "survives a
+VALIDATED SARSteer" claim, the gold-standard fix is still §8: a working held-out PC (held-out
+PAP/ICA, disjoint from alpha-dev, prospectively frozen, α kept at 0.1) + a pre-powered fresh
+confirmation. The PI override is a sound INTERNAL decision recorded transparently (both the
+mechanical `gate_valid=False` and this override are visible); it is not a substitute for that
+held-out PC when writing the paper.
+
+**Effect on the professor's overall question.** With the override, the two arms are:
+SARSteer = valid AMBIGUOUS, survival ~48% (attack partially survives); ALMGuard = valid WEAK,
+survival ~19% (attack largely blocked). The attack is therefore **defense-dependent** — it does NOT
+survive BOTH defenses, so a universal "survives published defenses" STRONG claim is not supported.
+The honest headline remains the mechanism contrast: a content-preserving signal-transform partially
+survives a downstream text-derived refusal-steering defense but is largely blocked by a frontend
+acoustic Mel-SAP defense (see the ALMGuard arm doc §7e and the full session log §13). NOTE: the two
+arms were run on DIFFERENT eval cohorts (SARSteer on the Run 7/attack-flip cohort; ALMGuard on the
+fresh Run 9 cohort), so |S|=30 vs 31 is a coincidence, not a paired head-to-head — a paired
+same-cohort comparison is part of the next-step plan.

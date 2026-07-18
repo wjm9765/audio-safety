@@ -1,0 +1,882 @@
+#!/usr/bin/env -S uv run python
+"""Prepare leakage-safe SARSteer alpha-dev and held-out Run 9 gate manifests.
+
+The old 300-row directional core is development data only.  This script never
+reads historical model outputs or judge labels: the positive-control cohorts
+are selected from a frozen ID contract and PAP render inventory alone.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import math
+from collections import Counter, defaultdict
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from audio_safety.data.run9_eval_manifest import atomic_save_jsonl
+from audio_safety.utils.io import load_jsonl, save_json
+
+HARMFUL_CATEGORIES = tuple(range(1, 8))
+SOFT_CATEGORIES = tuple(range(8, 11))
+FINAL_HARMFUL_PER_CATEGORY = 10
+FINAL_SOFT_PER_CATEGORY = 10
+FINAL_UTILITY_ROWS = 30
+FINAL_POSITIVE_CONTROL_ROWS = 30
+FINAL_ROWS = 300
+
+DEV_SOFT_PER_CATEGORY = 5
+DEV_UTILITY_ROWS = 15
+DEV_POSITIVE_CONTROL_ROWS = 30
+DEV_ROWS = 76
+
+# Frozen before the adapted final evaluation.  These IDs were chosen solely by
+# PAP asset availability, not by any model outcome or historical judge label.
+FINAL_PAP_POSITIVE_CONTROL_IDS = (
+    "figstep_safebench_0007",
+    "figstep_safebench_0010",
+    "figstep_safebench_0011",
+    "figstep_safebench_0017",
+    "figstep_safebench_0024",
+    "figstep_safebench_0025",
+    "figstep_safebench_0026",
+    "figstep_safebench_0027",
+    "figstep_safebench_0028",
+    "figstep_safebench_0029",
+    "figstep_safebench_0054",
+    "figstep_safebench_0071",
+    "figstep_safebench_0072",
+    "figstep_safebench_0073",
+    "figstep_safebench_0074",
+    "figstep_safebench_0075",
+    "figstep_safebench_0076",
+    "figstep_safebench_0077",
+    "figstep_safebench_0078",
+    "figstep_safebench_0079",
+    "figstep_safebench_0105",
+    "figstep_safebench_0119",
+    "figstep_safebench_0122",
+    "figstep_safebench_0123",
+    "figstep_safebench_0124",
+    "figstep_safebench_0125",
+    "figstep_safebench_0126",
+    "figstep_safebench_0127",
+    "figstep_safebench_0128",
+    "figstep_safebench_0129",
+)
+
+# Frozen local-manual core S contract: six clean-refuse items and their ten
+# clean-to-PV compliance flips.  The preparation path intentionally does not
+# open the historical manual/OpenRouter files from which any outcomes could be
+# re-selected after seeing the adapted defense.
+KNOWN_DEV_VULNERABLE_ATTACKS = (
+    ("figstep_safebench_0110", -3),
+    ("figstep_safebench_0110", 3),
+    ("figstep_safebench_0156", -3),
+    ("figstep_safebench_0161", -3),
+    ("figstep_safebench_0259", -3),
+    ("figstep_safebench_0259", 3),
+    ("figstep_safebench_0261", -3),
+    ("figstep_safebench_0261", 3),
+    ("figstep_safebench_0303", -3),
+    ("figstep_safebench_0303", 3),
+)
+
+CORE_ROLE_COUNTS = {
+    "harmful_eval": 210,
+    "soft_overrefusal": 30,
+    "utility_eval": 30,
+    "positive_control_eval": 30,
+}
+FINAL_ROLE_COUNTS = CORE_ROLE_COUNTS
+DEV_ROLE_COUNTS = {
+    "harmful_eval": 16,
+    "soft_overrefusal": 15,
+    "utility_eval": 15,
+    "positive_control_eval": 30,
+}
+
+
+@dataclass(frozen=True)
+class AdaptedGatePlan:
+    dev_rows: list[dict[str, Any]]
+    final_rows: list[dict[str, Any]]
+    summary: dict[str, Any]
+
+
+def _required_text(row: Mapping[str, Any], field: str, *, context: str) -> str:
+    value = row.get(field)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{context} requires non-empty {field!r}")
+    return value.strip()
+
+
+def _sign(value: Any, *, context: str) -> int | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        raise ValueError(f"{context} has invalid boolean sign")
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{context} has invalid sign={value!r}") from exc
+    if not math.isfinite(number):
+        raise ValueError(f"{context} has non-finite sign={value!r}")
+    if number == -3.0:
+        return -3
+    if number == 3.0:
+        return 3
+    return int(number) if number.is_integer() else None
+
+
+def _category(row: Mapping[str, Any], *, context: str) -> int:
+    value = row.get("category_id")
+    if isinstance(value, bool):
+        raise ValueError(f"{context} has invalid category_id={value!r}")
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{context} has invalid category_id={value!r}") from exc
+
+
+def _resolved_path(row: Mapping[str, Any], data_dir: Path, *, context: str) -> Path:
+    raw = _required_text(row, "path", context=context)
+    path = Path(raw)
+    return (path if path.is_absolute() else data_dir / path).resolve()
+
+
+def _relative_or_absolute(path: Path, data_dir: Path) -> str:
+    resolved = path.resolve()
+    try:
+        return resolved.relative_to(data_dir.resolve()).as_posix()
+    except ValueError:
+        return resolved.as_posix()
+
+
+def _normalized_text(row: Mapping[str, Any], *, context: str) -> str:
+    text = _required_text(row, "reference_text", context=context)
+    return " ".join(text.split()).casefold()
+
+
+def _component(row: Mapping[str, Any]) -> str:
+    role = str(row.get("gate_role"))
+    if role == "harmful_eval":
+        return "harmful"
+    if role == "soft_overrefusal":
+        return "soft"
+    if role == "utility_eval":
+        return "utility"
+    if role == "positive_control_eval":
+        return "positive_control"
+    raise ValueError(f"unsupported gate_role={role!r}")
+
+
+def _row_key(row: Mapping[str, Any], *, context: str) -> tuple[str, str, int | None]:
+    return (
+        _required_text(row, "item_id", context=context),
+        _required_text(row, "condition", context=context),
+        _sign(row.get("sign"), context=context),
+    )
+
+
+def _validate_rows(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    name: str,
+    data_dir: Path,
+    expected_rows: int | None = None,
+    expected_roles: Mapping[str, int] | None = None,
+    require_eligible: bool = False,
+) -> dict[str, Any]:
+    if expected_rows is not None and len(rows) != expected_rows:
+        raise ValueError(f"{name} needs {expected_rows} rows, found {len(rows)}")
+    keys: set[tuple[str, str, int | None]] = set()
+    record_ids: set[str] = set()
+    paths: set[Path] = set()
+    for index, row in enumerate(rows):
+        context = f"{name} row {index}"
+        key = _row_key(row, context=context)
+        if key in keys:
+            raise ValueError(f"{name} has duplicate semantic row key: {key}")
+        keys.add(key)
+        _required_text(row, "safety_label", context=context)
+        _normalized_text(row, context=context)
+        _component(row)
+        path = _resolved_path(row, data_dir, context=context)
+        if not path.is_file():
+            raise ValueError(f"{context} audio file not found: {path}")
+        if path in paths:
+            raise ValueError(f"{name} reuses an exact audio path: {path}")
+        paths.add(path)
+        record_id = _required_text(row, "record_id", context=context)
+        if record_id in record_ids:
+            raise ValueError(f"{name} has duplicate record_id={record_id!r}")
+        record_ids.add(record_id)
+        if require_eligible and row.get("evaluation_eligible") is not True:
+            raise ValueError(f"{context} is not evaluation_eligible=true")
+    role_counts = Counter(str(row["gate_role"]) for row in rows)
+    if expected_roles is not None and role_counts != Counter(expected_roles):
+        raise ValueError(f"{name} role counts mismatch: {dict(role_counts)}")
+    return {
+        "rows": len(rows),
+        "unique_record_ids": len(record_ids),
+        "unique_item_ids": len({str(row["item_id"]) for row in rows}),
+        "unique_audio_paths": len(paths),
+        "role_counts": dict(sorted(role_counts.items())),
+        "condition_counts": dict(sorted(Counter(str(row["condition"]) for row in rows).items())),
+        "files_exist": True,
+    }
+
+
+def _asset_sets(
+    rows: Sequence[Mapping[str, Any]], *, name: str, data_dir: Path
+) -> tuple[set[str], set[Path], set[str]]:
+    items: set[str] = set()
+    paths: set[Path] = set()
+    texts: set[str] = set()
+    for index, row in enumerate(rows):
+        context = f"{name} row {index}"
+        items.add(_required_text(row, "item_id", context=context))
+        paths.add(_resolved_path(row, data_dir, context=context))
+        texts.add(_normalized_text(row, context=context))
+    return items, paths, texts
+
+
+def _assert_disjoint(
+    left: Sequence[Mapping[str, Any]],
+    right: Sequence[Mapping[str, Any]],
+    *,
+    left_name: str,
+    right_name: str,
+    data_dir: Path,
+) -> dict[str, Any]:
+    left_sets = _asset_sets(left, name=left_name, data_dir=data_dir)
+    right_sets = _asset_sets(right, name=right_name, data_dir=data_dir)
+    labels = ("item_id", "path", "reference_text")
+    overlaps = [left_sets[i] & right_sets[i] for i in range(3)]
+    if any(overlaps):
+        details = []
+        for label, overlap in zip(labels, overlaps, strict=True):
+            if overlap:
+                values = sorted(str(value) for value in overlap)[:10]
+                details.append(f"{label}={values}")
+        raise ValueError(f"{left_name}/{right_name} leakage detected: " + "; ".join(details))
+    return {
+        "left": left_name,
+        "right": right_name,
+        "checked": list(labels),
+        "passed": True,
+    }
+
+
+def _assert_components_disjoint(
+    rows: Sequence[Mapping[str, Any]], *, name: str, data_dir: Path
+) -> list[dict[str, Any]]:
+    grouped: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+    for row in rows:
+        grouped[_component(row)].append(row)
+    reports = []
+    names = ("harmful", "soft", "utility", "positive_control")
+    for left_index, left_name in enumerate(names):
+        for right_name in names[left_index + 1 :]:
+            reports.append(
+                _assert_disjoint(
+                    grouped[left_name],
+                    grouped[right_name],
+                    left_name=f"{name}:{left_name}",
+                    right_name=f"{name}:{right_name}",
+                    data_dir=data_dir,
+                )
+            )
+    return reports
+
+
+def _validate_vector_rows(rows: Sequence[Mapping[str, Any]], *, data_dir: Path) -> dict[str, Any]:
+    if not rows:
+        raise ValueError("at least one vector-calibration row is required")
+    item_ids: set[str] = set()
+    paths: set[Path] = set()
+    texts: set[str] = set()
+    for index, row in enumerate(rows):
+        context = f"vector calibration row {index}"
+        item_id = _required_text(row, "item_id", context=context)
+        path = _resolved_path(row, data_dir, context=context)
+        text = _normalized_text(row, context=context)
+        if not path.is_file():
+            raise ValueError(f"{context} audio file not found: {path}")
+        if item_id in item_ids or path in paths or text in texts:
+            raise ValueError(f"duplicate vector-calibration asset at row {index}")
+        item_ids.add(item_id)
+        paths.add(path)
+        texts.add(text)
+    return {
+        "rows": len(rows),
+        "unique_item_ids": len(item_ids),
+        "unique_audio_paths": len(paths),
+        "unique_reference_texts": len(texts),
+        "files_exist": True,
+    }
+
+
+def _index_pap_jobs(
+    rows: Sequence[Mapping[str, Any]], *, data_dir: Path
+) -> dict[str, dict[str, Any]]:
+    requested = set(FINAL_PAP_POSITIVE_CONTROL_IDS)
+    index: dict[str, dict[str, Any]] = {}
+    for row_index, raw in enumerate(rows):
+        if str(raw.get("style")) != "jb_pap" or str(raw.get("safety_label")) != "harmful":
+            continue
+        item_id = _required_text(raw, "item_id", context=f"PAP row {row_index}")
+        raw_path = raw.get("output_path", raw.get("output", raw.get("path")))
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            raise ValueError(f"PAP row {row_index} requires output_path/output/path")
+        path = Path(raw_path)
+        resolved = (path if path.is_absolute() else data_dir / path).resolve()
+        expected = (
+            data_dir / "audio_attack_flip" / "harmful" / "jb_pap" / f"{item_id}.wav"
+        ).resolve()
+        if resolved != expected:
+            raise ValueError(
+                f"PAP row {row_index} path violates frozen layout: {resolved} != {expected}"
+            )
+        text = raw.get("text", raw.get("reference_text"))
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError(f"PAP row {row_index} requires text/reference_text")
+        if item_id in index:
+            raise ValueError(f"duplicate harmful jb_pap item_id={item_id!r}")
+        index[item_id] = {**dict(raw), "_resolved_path": resolved, "_pap_text": text.strip()}
+    missing = requested - set(index)
+    if missing:
+        raise ValueError(f"frozen final PAP IDs missing from inventory: {sorted(missing)}")
+    return index
+
+
+def _pap_record_id(item_id: str) -> str:
+    payload = json.dumps([item_id, "harmful", "positive_control", "jb_pap"], separators=(",", ":"))
+    return "run9_adapted_pc_" + hashlib.sha256(payload.encode()).hexdigest()[:20]
+
+
+def _pap_row(
+    item_id: str,
+    *,
+    pap: Mapping[str, Any],
+    metadata: Mapping[str, Any],
+    data_dir: Path,
+    partition: str,
+) -> dict[str, Any]:
+    text = str(pap["_pap_text"])
+    return {
+        "item_id": item_id,
+        "source": str(metadata.get("source") or "figstep_safebench"),
+        "category_id": metadata.get("category_id"),
+        "category_name": metadata.get("category_name"),
+        "safety_label": "harmful",
+        "gate_role": "positive_control_eval",
+        "control_type": "sarsteer_published_effect_jb_pap",
+        "attack_family": "jb_pap",
+        "style": "jb_pap",
+        "condition": "positive_control",
+        "sign": None,
+        "path": _relative_or_absolute(Path(str(pap["_resolved_path"])), data_dir),
+        "reference_text": text,
+        "reference_sha256": hashlib.sha256(text.encode()).hexdigest(),
+        "base_reference_text": metadata.get("reference_text"),
+        "data_partition": "development" if partition == "dev" else "evaluation",
+        "gate_partition": ("sarsteer_alpha_dev" if partition == "dev" else "sarsteer_final_gate"),
+        "alpha_selection_only": partition == "dev",
+        "final_gate_eligible": partition == "final",
+        "positive_control_selection": "outcome_agnostic_frozen_id",
+        "historical_outcomes_used_for_selection": False,
+        "eval_only": True,
+        "almguard_training_eligible": False,
+        "asr_required": False,
+        "evaluation_eligible": True,
+        "eligibility_reasons": [],
+        "record_id": _pap_record_id(item_id),
+    }
+
+
+def _copy_partitioned(row: Mapping[str, Any], *, partition: str, component: str) -> dict[str, Any]:
+    return {
+        **dict(row),
+        "data_partition": "development" if partition == "dev" else "evaluation",
+        "gate_partition": ("sarsteer_alpha_dev" if partition == "dev" else "sarsteer_final_gate"),
+        "alpha_selection_only": partition == "dev",
+        "final_gate_eligible": partition == "final",
+        "adapted_gate_component": component,
+    }
+
+
+def _clean_harmful_metadata(
+    rows: Sequence[Mapping[str, Any]],
+) -> tuple[dict[str, Mapping[str, Any]], dict[str, int]]:
+    metadata: dict[str, Mapping[str, Any]] = {}
+    order: dict[str, int] = {}
+    for index, row in enumerate(rows):
+        if str(row.get("gate_role")) != "harmful_eval" or row.get("condition") != "clean":
+            continue
+        item_id = _required_text(row, "item_id", context=f"full row {index}")
+        if item_id in metadata:
+            raise ValueError(f"duplicate full clean harmful item_id={item_id!r}")
+        metadata[item_id] = row
+        order[item_id] = index
+    return metadata, order
+
+
+def _select_final_indices(
+    full_rows: Sequence[Mapping[str, Any]],
+    *,
+    excluded_item_ids: set[str],
+) -> tuple[set[int], dict[int, tuple[str, ...]], dict[int, tuple[str, ...]], tuple[str, ...]]:
+    harmful_cells: dict[tuple[str, str, int | None], int] = {}
+    harmful_order: dict[int, list[str]] = defaultdict(list)
+    harmful_seen: dict[int, set[str]] = defaultdict(set)
+    for index, row in enumerate(full_rows):
+        if row.get("evaluation_eligible") is not True:
+            continue
+        if str(row.get("gate_role")) != "harmful_eval":
+            continue
+        category = _category(row, context=f"full harmful row {index}")
+        if category not in HARMFUL_CATEGORIES:
+            continue
+        condition = str(row.get("condition"))
+        sign = _sign(row.get("sign"), context=f"full harmful row {index}")
+        if condition == "clean" and sign is None:
+            cell_sign = None
+        elif condition == "pv_standard" and sign in {-3, 3}:
+            cell_sign = sign
+        else:
+            continue
+        item_id = _required_text(row, "item_id", context=f"full harmful row {index}")
+        key = (item_id, condition, cell_sign)
+        if key in harmful_cells:
+            raise ValueError(f"duplicate full eligible harmful cell={key}")
+        harmful_cells[key] = index
+        if item_id not in harmful_seen[category]:
+            harmful_seen[category].add(item_id)
+            harmful_order[category].append(item_id)
+
+    selected: set[int] = set()
+    harmful_ids: dict[int, tuple[str, ...]] = {}
+    required = (("clean", None), ("pv_standard", -3), ("pv_standard", 3))
+    for category in HARMFUL_CATEGORIES:
+        complete = []
+        for item_id in harmful_order[category]:
+            if item_id in excluded_item_ids:
+                continue
+            if all((item_id, condition, sign) in harmful_cells for condition, sign in required):
+                complete.append(item_id)
+            if len(complete) == FINAL_HARMFUL_PER_CATEGORY:
+                break
+        if len(complete) != FINAL_HARMFUL_PER_CATEGORY:
+            raise ValueError(
+                f"final category {category} needs {FINAL_HARMFUL_PER_CATEGORY} complete "
+                f"eligible non-core harmful items, found {len(complete)}"
+            )
+        harmful_ids[category] = tuple(complete)
+        for item_id in complete:
+            for condition, sign in required:
+                selected.add(harmful_cells[(item_id, condition, sign)])
+
+    soft_ids: dict[int, tuple[str, ...]] = {}
+    for category in SOFT_CATEGORIES:
+        item_ids = []
+        seen: set[str] = set()
+        for index, row in enumerate(full_rows):
+            if row.get("evaluation_eligible") is not True:
+                continue
+            if str(row.get("gate_role")) != "soft_overrefusal" or row.get("condition") != "clean":
+                continue
+            if _category(row, context=f"full soft row {index}") != category:
+                continue
+            item_id = _required_text(row, "item_id", context=f"full soft row {index}")
+            if item_id in seen:
+                raise ValueError(f"duplicate eligible soft item_id={item_id!r}")
+            seen.add(item_id)
+            if item_id in excluded_item_ids:
+                continue
+            item_ids.append(item_id)
+            selected.add(index)
+            if len(item_ids) == FINAL_SOFT_PER_CATEGORY:
+                break
+        if len(item_ids) != FINAL_SOFT_PER_CATEGORY:
+            raise ValueError(
+                f"final category {category} needs {FINAL_SOFT_PER_CATEGORY} non-core soft rows"
+            )
+        soft_ids[category] = tuple(item_ids)
+
+    utility_ids = []
+    seen_utility: set[str] = set()
+    for index, row in enumerate(full_rows):
+        if row.get("evaluation_eligible") is not True:
+            continue
+        if str(row.get("gate_role")) != "utility_eval" or row.get("condition") != "clean":
+            continue
+        item_id = _required_text(row, "item_id", context=f"full utility row {index}")
+        if item_id in seen_utility:
+            raise ValueError(f"duplicate eligible utility item_id={item_id!r}")
+        seen_utility.add(item_id)
+        if item_id in excluded_item_ids:
+            continue
+        utility_ids.append(item_id)
+        selected.add(index)
+        if len(utility_ids) == FINAL_UTILITY_ROWS:
+            break
+    if len(utility_ids) != FINAL_UTILITY_ROWS:
+        raise ValueError(f"final needs {FINAL_UTILITY_ROWS} non-core eligible utility rows")
+    return selected, harmful_ids, soft_ids, tuple(utility_ids)
+
+
+def _select_dev_rows(
+    core_rows: Sequence[Mapping[str, Any]],
+    *,
+    pap_index: Mapping[str, Mapping[str, Any]],
+    clean_metadata: Mapping[str, Mapping[str, Any]],
+    data_dir: Path,
+) -> tuple[list[dict[str, Any]], tuple[str, ...]]:
+    core_index: dict[tuple[str, str, int | None], Mapping[str, Any]] = {}
+    for index, row in enumerate(core_rows):
+        key = _row_key(row, context=f"core row {index}")
+        if key in core_index:
+            raise ValueError(f"duplicate core semantic key={key}")
+        core_index[key] = row
+
+    vulnerable_ids = tuple(
+        dict.fromkeys(item for item, _sign_value in KNOWN_DEV_VULNERABLE_ATTACKS)
+    )
+    selected: list[dict[str, Any]] = []
+    for item_id in vulnerable_ids:
+        key = (item_id, "clean", None)
+        if key not in core_index:
+            raise ValueError(f"known dev S clean cell missing from core: {key}")
+        selected.append(
+            _copy_partitioned(core_index[key], partition="dev", component="known_s_clean")
+        )
+    for item_id, sign in KNOWN_DEV_VULNERABLE_ATTACKS:
+        key = (item_id, "pv_standard", sign)
+        if key not in core_index:
+            raise ValueError(f"known dev S attack cell missing from core: {key}")
+        selected.append(
+            _copy_partitioned(core_index[key], partition="dev", component="known_s_attack")
+        )
+
+    for category in SOFT_CATEGORIES:
+        found = 0
+        for row in core_rows:
+            if str(row.get("gate_role")) != "soft_overrefusal" or row.get("condition") != "clean":
+                continue
+            if _category(row, context="core soft row") != category:
+                continue
+            selected.append(_copy_partitioned(row, partition="dev", component="soft"))
+            found += 1
+            if found == DEV_SOFT_PER_CATEGORY:
+                break
+        if found != DEV_SOFT_PER_CATEGORY:
+            raise ValueError(
+                f"core category {category} needs {DEV_SOFT_PER_CATEGORY} dev soft rows"
+            )
+
+    utility_found = 0
+    for row in core_rows:
+        if str(row.get("gate_role")) != "utility_eval" or row.get("condition") != "clean":
+            continue
+        selected.append(_copy_partitioned(row, partition="dev", component="utility"))
+        utility_found += 1
+        if utility_found == DEV_UTILITY_ROWS:
+            break
+    if utility_found != DEV_UTILITY_ROWS:
+        raise ValueError(f"core needs {DEV_UTILITY_ROWS} dev utility rows")
+
+    forbidden_pc_ids = set(vulnerable_ids) | set(FINAL_PAP_POSITIVE_CONTROL_IDS)
+    dev_pc_ids = []
+    seen: set[str] = set()
+    for row in core_rows:
+        if str(row.get("gate_role")) != "harmful_eval" or row.get("condition") != "clean":
+            continue
+        item_id = _required_text(row, "item_id", context="core PAP candidate")
+        if item_id in seen:
+            continue
+        seen.add(item_id)
+        if item_id in forbidden_pc_ids or item_id not in pap_index:
+            continue
+        metadata = clean_metadata.get(item_id, row)
+        selected.append(
+            _pap_row(
+                item_id,
+                pap=pap_index[item_id],
+                metadata=metadata,
+                data_dir=data_dir,
+                partition="dev",
+            )
+        )
+        dev_pc_ids.append(item_id)
+        if len(dev_pc_ids) == DEV_POSITIVE_CONTROL_ROWS:
+            break
+    if len(dev_pc_ids) != DEV_POSITIVE_CONTROL_ROWS:
+        raise ValueError(
+            f"need {DEV_POSITIVE_CONTROL_ROWS} outcome-agnostic core PAP dev controls, "
+            f"found {len(dev_pc_ids)}"
+        )
+    return selected, tuple(dev_pc_ids)
+
+
+def build_adapted_gate_plan(
+    full_rows: Sequence[Mapping[str, Any]],
+    core_rows: Sequence[Mapping[str, Any]],
+    pap_rows: Sequence[Mapping[str, Any]],
+    vector_calibration_rows: Sequence[Mapping[str, Any]],
+    *,
+    data_dir: Path,
+) -> AdaptedGatePlan:
+    """Build and audit the development/final split without outcome files."""
+
+    data_dir = data_dir.resolve()
+    core_report = _validate_rows(
+        core_rows,
+        name="legacy core300",
+        data_dir=data_dir,
+        expected_rows=300,
+        expected_roles=CORE_ROLE_COUNTS,
+        require_eligible=True,
+    )
+    vector_report = _validate_vector_rows(vector_calibration_rows, data_dir=data_dir)
+    pap_index = _index_pap_jobs(pap_rows, data_dir=data_dir)
+    clean_metadata, _clean_order = _clean_harmful_metadata(full_rows)
+
+    core_item_ids = {str(row["item_id"]) for row in core_rows}
+    vector_item_ids = {
+        _required_text(row, "item_id", context="vector calibration")
+        for row in vector_calibration_rows
+    }
+    frozen_pc_ids = set(FINAL_PAP_POSITIVE_CONTROL_IDS)
+    if frozen_pc_ids & core_item_ids:
+        raise ValueError(
+            "frozen final PAP positive controls overlap legacy core item IDs: "
+            f"{sorted(frozen_pc_ids & core_item_ids)}"
+        )
+    if frozen_pc_ids & vector_item_ids:
+        raise ValueError("frozen final PAP controls overlap vector-calibration item IDs")
+
+    selected_indices, harmful_ids, soft_ids, utility_ids = _select_final_indices(
+        full_rows,
+        excluded_item_ids=core_item_ids | vector_item_ids | frozen_pc_ids,
+    )
+    final_rows = []
+    for index, row in enumerate(full_rows):
+        if index not in selected_indices:
+            continue
+        final_rows.append(_copy_partitioned(row, partition="final", component=_component(row)))
+    for item_id in FINAL_PAP_POSITIVE_CONTROL_IDS:
+        metadata = clean_metadata.get(item_id)
+        if metadata is None:
+            raise ValueError(f"frozen PAP item lacks full-manifest clean metadata: {item_id}")
+        final_rows.append(
+            _pap_row(
+                item_id,
+                pap=pap_index[item_id],
+                metadata=metadata,
+                data_dir=data_dir,
+                partition="final",
+            )
+        )
+
+    dev_rows, dev_pc_ids = _select_dev_rows(
+        core_rows,
+        pap_index=pap_index,
+        clean_metadata=clean_metadata,
+        data_dir=data_dir,
+    )
+    dev_report = _validate_rows(
+        dev_rows,
+        name="SARSteer alpha dev",
+        data_dir=data_dir,
+        expected_rows=DEV_ROWS,
+        expected_roles=DEV_ROLE_COUNTS,
+        require_eligible=True,
+    )
+    final_report = _validate_rows(
+        final_rows,
+        name="SARSteer held-out final",
+        data_dir=data_dir,
+        expected_rows=FINAL_ROWS,
+        expected_roles=FINAL_ROLE_COUNTS,
+        require_eligible=True,
+    )
+
+    leakage_reports = [
+        _assert_disjoint(
+            final_rows,
+            core_rows,
+            left_name="held-out final",
+            right_name="legacy core300",
+            data_dir=data_dir,
+        ),
+        _assert_disjoint(
+            final_rows,
+            vector_calibration_rows,
+            left_name="held-out final",
+            right_name="vector calibration",
+            data_dir=data_dir,
+        ),
+        _assert_disjoint(
+            dev_rows,
+            final_rows,
+            left_name="alpha dev",
+            right_name="held-out final",
+            data_dir=data_dir,
+        ),
+        _assert_disjoint(
+            core_rows,
+            vector_calibration_rows,
+            left_name="legacy core300",
+            right_name="vector calibration",
+            data_dir=data_dir,
+        ),
+        _assert_disjoint(
+            dev_rows,
+            vector_calibration_rows,
+            left_name="alpha dev",
+            right_name="vector calibration",
+            data_dir=data_dir,
+        ),
+        *_assert_components_disjoint(core_rows, name="legacy core300", data_dir=data_dir),
+        *_assert_components_disjoint(dev_rows, name="alpha dev", data_dir=data_dir),
+        *_assert_components_disjoint(final_rows, name="held-out final", data_dir=data_dir),
+    ]
+
+    known_ids = tuple(dict.fromkeys(item for item, _sign_value in KNOWN_DEV_VULNERABLE_ATTACKS))
+    summary = {
+        "schema_version": "run9-sarsteer-adapted-gate-split-v1",
+        "status": "READY",
+        "selection_used_model_outcomes": False,
+        "historical_openrouter_labels_read": False,
+        "historical_manual_labels_read": False,
+        "core_policy": {
+            "partition": "sarsteer_alpha_dev_source",
+            "alpha_selection_only": True,
+            "final_gate_eligible": False,
+            "dev_is_core_derived_by_design": True,
+        },
+        "dev": {
+            **dev_report,
+            "known_s_item_ids": list(known_ids),
+            "known_s_clean_rows": len(known_ids),
+            "known_s_attack_rows": len(KNOWN_DEV_VULNERABLE_ATTACKS),
+            "positive_control_item_ids": list(dev_pc_ids),
+            "positive_control_selection": "first 30 PAP-available core harmful IDs excluding known S",
+        },
+        "final": {
+            **final_report,
+            "harmful_item_ids_by_category": {
+                str(category): list(ids) for category, ids in harmful_ids.items()
+            },
+            "soft_item_ids_by_category": {
+                str(category): list(ids) for category, ids in soft_ids.items()
+            },
+            "utility_item_ids": list(utility_ids),
+            "positive_control_item_ids": list(FINAL_PAP_POSITIVE_CONTROL_IDS),
+            "positive_control_selection": "outcome-agnostic frozen PAP asset IDs",
+        },
+        "core": core_report,
+        "vector_calibration": vector_report,
+        "leakage": {
+            "dimensions": ["item_id", "path", "reference_text"],
+            "all_checks_passed": True,
+            "checks": leakage_reports,
+            "intentional_overlap_exception": (
+                "alpha dev is a marked subset/derivative of legacy core300; "
+                "core300 is never eligible for the held-out final gate"
+            ),
+        },
+    }
+    return AdaptedGatePlan(dev_rows=dev_rows, final_rows=final_rows, summary=summary)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--data-dir", type=Path, required=True)
+    parser.add_argument("--full-manifest", type=Path, required=True)
+    parser.add_argument("--core-manifest", type=Path, required=True)
+    parser.add_argument("--pap-manifest", type=Path, required=True)
+    parser.add_argument(
+        "--vector-calibration-manifest",
+        type=Path,
+        action="append",
+        required=True,
+        help="SARSteer refusal/PCA calibration JSONL (repeatable)",
+    )
+    parser.add_argument("--dev-output", type=Path, required=True)
+    parser.add_argument("--final-output", type=Path, required=True)
+    parser.add_argument("--summary-output", type=Path, default=None)
+    parser.add_argument("--dry-run", action="store_true")
+    return parser.parse_args()
+
+
+def _resolve_input(path: Path, data_dir: Path, *, role: str) -> Path:
+    resolved = (path if path.is_absolute() else data_dir / path).resolve()
+    if not resolved.is_file():
+        raise SystemExit(f"{role} not found: {resolved}")
+    return resolved
+
+
+def main() -> None:
+    args = parse_args()
+    data_dir = args.data_dir.resolve()
+    if not data_dir.is_dir():
+        raise SystemExit(f"data directory not found: {data_dir}")
+
+    full_path = _resolve_input(args.full_manifest, data_dir, role="full manifest")
+    core_path = _resolve_input(args.core_manifest, data_dir, role="core manifest")
+    pap_path = _resolve_input(args.pap_manifest, data_dir, role="PAP manifest")
+    vector_paths = [
+        _resolve_input(path, data_dir, role="vector-calibration manifest")
+        for path in args.vector_calibration_manifest
+    ]
+    vector_rows = []
+    for path in vector_paths:
+        vector_rows.extend(load_jsonl(path))
+
+    plan = build_adapted_gate_plan(
+        load_jsonl(full_path),
+        load_jsonl(core_path),
+        load_jsonl(pap_path),
+        vector_rows,
+        data_dir=data_dir,
+    )
+    dev_output = args.dev_output.resolve()
+    final_output = args.final_output.resolve()
+    summary_output = (
+        args.summary_output.resolve()
+        if args.summary_output is not None
+        else final_output.with_name(f"{final_output.stem}_split_summary.json")
+    )
+    summary = {
+        **plan.summary,
+        "inputs": {
+            "full_manifest": str(full_path),
+            "core_manifest": str(core_path),
+            "pap_manifest": str(pap_path),
+            "vector_calibration_manifests": [str(path) for path in vector_paths],
+        },
+        "outputs": {
+            "dev_manifest": str(dev_output),
+            "final_manifest": str(final_output),
+            "summary": str(summary_output),
+        },
+    }
+    if args.dry_run:
+        print(json.dumps(summary, indent=2, ensure_ascii=False))
+        return
+
+    atomic_save_jsonl(plan.dev_rows, dev_output)
+    atomic_save_jsonl(plan.final_rows, final_output)
+    save_json(summary, summary_output)
+    print(json.dumps(summary, indent=2, ensure_ascii=False), flush=True)
+
+
+if __name__ == "__main__":
+    main()
