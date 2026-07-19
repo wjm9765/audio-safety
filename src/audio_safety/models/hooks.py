@@ -543,6 +543,139 @@ class ResidualStreamIntervention:
         return self._applied_count
 
 
+class ProjectedTransportIntervention:
+    """Pair-specific projected transport at a set of prefill positions (one layer).
+
+    At decoder layer ``layer_idx`` and a fixed set of absolute prefill ``positions``,
+    replace ONLY the ``basis``-subspace component of each position's residual with the
+    donor's, scaled by the dose::
+
+        h[j] <- h[j] + scale * P_U( donor[j] - h[j] )      for j in positions
+
+    where ``P_U(x) = (x @ basis.T) @ basis`` projects onto the row space of the
+    orthonormal ``basis`` (shape ``(k, d)``), and ``donor`` is a ``(len(positions), d)``
+    matrix of donor hidden states aligned row-for-row with **sorted** ``positions``.
+
+    This is interchange / activation patching RESTRICTED TO A SUBSPACE — the Run 10
+    channel-invariance operator — not a directional add. Properties:
+
+    - **Reciprocity.** With ``scale=1`` and the same ``basis``, restoration
+      (``donor=clean`` while the forward pass runs on the *attack* audio) and corruption
+      (``donor=attack`` while the pass runs on the *clean* audio) are exact reciprocals
+      within the subspace: each swaps in the donor's subspace coordinate.
+    - **Prefill-only, batch-1.** On every length-1 KV-cached decode step the positions
+      are out of range, so the transport applies exactly once. Assert
+      ``applied_count == 1`` after a full forward/generation.
+    - **Arm A** passes all audio-token positions (propagation support); **Arm B** passes
+      the single readout ``t_AB`` position (expression support). Never both together.
+
+    Projection is computed in float32 for numerical stability, then cast to the hidden
+    dtype. ``donor``/``basis`` may be numpy arrays or torch tensors.
+
+    **One-shot.** The transport is applied on the FIRST forward the hook sees (the full
+    prefill) and skipped on every later forward (KV-cached decode steps). The driver MUST
+    build a fresh object per (direction, arm, pair, dose), use it as a context manager so
+    the handle is removed on exit, and assert ``applied_count == 1`` afterwards. Assumes
+    the standard KV-cached path (no chunked/speculative prefill).
+    """
+
+    def __init__(
+        self,
+        model: Any,
+        *,
+        layer_idx: int,
+        positions: Iterable[int],
+        donor: Any,
+        basis: Any,
+        scale: float = 1.0,
+    ):
+        positions = [int(p) for p in positions]
+        if not positions:
+            raise ValueError("positions must be non-empty")
+        if len(set(positions)) != len(positions):
+            raise ValueError("positions must be unique")
+        if min(positions) < 0:
+            raise ValueError("positions must be non-negative absolute prefill indices")
+        ordered = sorted(positions)
+        if ordered != positions:
+            raise ValueError("positions must be provided sorted to stay aligned with donor rows")
+        self._layer = get_decoder_layers(model)[layer_idx]
+        self._layer_idx = layer_idx
+        self._positions = positions
+        self._max_pos = positions[-1]
+        self._donor = donor
+        self._basis = basis
+        self._scale = float(scale)
+        self._applied_count = 0
+        self._handle: Any | None = None
+
+    def _hook(self, module: Any, inputs: Any, output: Any) -> Any:
+        import torch
+
+        hidden = output[0] if isinstance(output, tuple) else output
+        if hidden.shape[0] != 1:
+            raise ValueError("ProjectedTransportIntervention requires batch size 1")
+        # One-shot: apply on the first forward only, skip every later (decode) forward.
+        # Gating on _applied_count (not sequence length) is required — a support that
+        # includes position 0 would otherwise be re-patched on every length-1 decode step.
+        if self._applied_count:
+            return output
+        # Fail fast: an out-of-range support on the (first) prefill would otherwise be a
+        # silent no-op read as a null causal effect — e.g. a misaligned attack sequence.
+        if self._max_pos >= hidden.shape[1]:
+            raise ValueError(
+                f"intervention positions (max {self._max_pos}) exceed the prefill "
+                f"sequence length {hidden.shape[1]}"
+            )
+
+        idx = torch.as_tensor(self._positions, dtype=torch.long, device=hidden.device)
+        donor = torch.as_tensor(self._donor, device=hidden.device, dtype=torch.float32)
+        basis = torch.as_tensor(self._basis, device=hidden.device, dtype=torch.float32)
+        if donor.ndim != 2 or donor.shape[0] != len(self._positions):
+            raise ValueError(
+                f"donor must be (n_positions, d); got {tuple(donor.shape)} for "
+                f"{len(self._positions)} positions"
+            )
+        if basis.ndim != 2:
+            raise ValueError(f"basis must be (k, d); got {tuple(basis.shape)}")
+        if donor.shape[1] != hidden.shape[-1] or basis.shape[1] != hidden.shape[-1]:
+            raise ValueError(
+                f"donor/basis dim must equal hidden dim {hidden.shape[-1]}; "
+                f"got donor {donor.shape[1]}, basis {basis.shape[1]}"
+            )
+        if not torch.isfinite(donor).all() or not torch.isfinite(basis).all():
+            raise ValueError("donor/basis contain non-finite values")
+        gram = basis @ basis.transpose(0, 1)
+        if not torch.allclose(
+            gram, torch.eye(basis.shape[0], device=basis.device, dtype=basis.dtype),
+            atol=1e-4, rtol=1e-4,
+        ):
+            raise ValueError("basis rows must be orthonormal (P_U assumes an orthonormal basis)")
+
+        current = hidden[0].index_select(0, idx).to(torch.float32)  # (m, d)
+        delta = donor - current                                     # (m, d)
+        proj = (delta @ basis.transpose(0, 1)) @ basis              # (m, d), row-space of basis
+        replacement = current + self._scale * proj                  # float32, one cast below
+        edited = hidden.clone()
+        edited[0, idx, :] = replacement.to(hidden.dtype)
+        self._applied_count += 1
+        return _replace_hidden_output(output, edited)
+
+    def __enter__(self) -> "ProjectedTransportIntervention":
+        self._handle = self._layer.register_forward_hook(self._hook)
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        if self._handle is not None:
+            self._handle.remove()
+        self._handle = None
+
+    @property
+    def applied_count(self) -> int:
+        """Forward passes that applied the transport. Must be 1 after a full generation."""
+        return self._applied_count
+
+
 class MultiLayerAdditiveSteering:
     """Add a distinct per-layer vector at selected positions on every forward pass.
 

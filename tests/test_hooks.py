@@ -4,7 +4,11 @@ import numpy as np
 import pytest
 import torch
 
-from audio_safety.models.hooks import ResidualStreamIntervention, get_decoder_layers
+from audio_safety.models.hooks import (
+    ProjectedTransportIntervention,
+    ResidualStreamIntervention,
+    get_decoder_layers,
+)
 
 
 def test_get_decoder_layers_current_qwen2_audio_path():
@@ -262,3 +266,122 @@ def test_patch_state_dim_mismatch_raises_at_forward():
         replacement_state=np.zeros(3),
     ), pytest.raises(ValueError, match="!= hidden dim"):
         model(torch.zeros(1, 2, 2))
+
+
+# --- ProjectedTransportIntervention (Run 10 channel-invariance operator) ---
+
+_BASIS_2 = np.array([[1.0, 0, 0, 0], [0, 1.0, 0, 0]], dtype=np.float32)  # P_U keeps coords 0,1
+
+
+def test_projected_transport_swaps_only_subspace_at_support():
+    model = _TinyLayerModel()
+    hidden = torch.tensor(
+        [[[10.0, 11, 12, 13], [1, 2, 3, 4], [5, 6, 7, 8]]], dtype=torch.float32
+    )
+    donor = np.array([[100.0, 200, 300, 400], [500, 600, 700, 800]], dtype=np.float32)
+
+    with ProjectedTransportIntervention(
+        model, layer_idx=0, positions=[1, 2], donor=donor, basis=_BASIS_2
+    ) as ctx:
+        edited = model(hidden)
+        assert ctx.applied_count == 1
+
+    # support rows take the donor's U-coords (0,1) and keep the host's off-U coords (2,3)
+    assert torch.allclose(edited[0, 1], torch.tensor([100.0, 200, 3, 4]))
+    assert torch.allclose(edited[0, 2], torch.tensor([500.0, 600, 7, 8]))
+    # non-support row untouched
+    assert torch.allclose(edited[0, 0], torch.tensor([10.0, 11, 12, 13]))
+
+
+def test_projected_transport_scale_interpolates():
+    model = _TinyLayerModel()
+    hidden = torch.zeros(1, 2, 4)
+    donor = np.array([[8.0, 0, 0, 0]], dtype=np.float32)
+    with ProjectedTransportIntervention(
+        model, layer_idx=0, positions=[1], donor=donor, basis=_BASIS_2, scale=0.25
+    ):
+        edited = model(hidden)
+    assert torch.allclose(edited[0, 1], torch.tensor([2.0, 0, 0, 0]))  # 0 + 0.25*(8-0)
+
+
+def test_projected_transport_is_one_shot_and_skips_decode_step():
+    """Regression for the position-0 decode-repatch bug: a support containing 0 must
+    NOT be re-applied on later (length-1) forwards."""
+    model = _TinyLayerModel()
+    prefill = torch.zeros(1, 3, 4)
+    donor = np.array([[9.0, 0, 0, 0]], dtype=np.float32)
+    with ProjectedTransportIntervention(
+        model, layer_idx=0, positions=[0], donor=donor, basis=_BASIS_2
+    ) as ctx:
+        model(prefill)
+        assert ctx.applied_count == 1
+        decode = torch.tensor([[[1.0, 2, 3, 4]]], dtype=torch.float32)  # length-1 decode
+        out2 = model(decode)
+        assert ctx.applied_count == 1                # not re-applied
+        assert torch.allclose(out2, decode)          # decode step untouched
+
+
+def test_projected_transport_fails_fast_on_out_of_range_support():
+    """Regression for the silent no-op bug: a misaligned support must raise, not
+    quietly return an unpatched (null-effect) forward."""
+    model = _TinyLayerModel()
+    donor = np.zeros((1, 4), dtype=np.float32)
+    with ProjectedTransportIntervention(
+        model, layer_idx=0, positions=[5], donor=donor, basis=_BASIS_2
+    ), pytest.raises(ValueError, match="exceed the prefill"):
+        model(torch.zeros(1, 3, 4))
+
+
+def test_projected_transport_rejects_non_orthonormal_basis_and_nonfinite():
+    model = _TinyLayerModel()
+    donor = np.zeros((2, 4), dtype=np.float32)
+    bad_basis = np.array([[1.0, 0, 0, 0], [1.0, 0, 0, 0]], dtype=np.float32)  # not orthonormal
+    with ProjectedTransportIntervention(
+        model, layer_idx=0, positions=[1, 2], donor=donor, basis=bad_basis
+    ), pytest.raises(ValueError, match="orthonormal"):
+        model(torch.zeros(1, 3, 4))
+
+    bad_donor = np.array([[np.inf, 0, 0, 0], [0, 0, 0, 0]], dtype=np.float32)
+    with ProjectedTransportIntervention(
+        model, layer_idx=0, positions=[1, 2], donor=bad_donor, basis=_BASIS_2
+    ), pytest.raises(ValueError, match="non-finite"):
+        model(torch.zeros(1, 3, 4))
+
+
+def test_projected_transport_constructor_guards():
+    model = _TinyLayerModel()
+    donor = np.zeros((2, 4), dtype=np.float32)
+    def _make(positions):
+        return ProjectedTransportIntervention(
+            model, layer_idx=0, positions=positions, donor=donor, basis=_BASIS_2
+        )
+
+    with pytest.raises(ValueError, match="non-empty"):
+        _make([])
+    with pytest.raises(ValueError, match="unique"):
+        _make([1, 1])
+    with pytest.raises(ValueError, match="non-negative"):
+        _make([-1, 0])
+    with pytest.raises(ValueError, match="sorted"):
+        _make([2, 1])
+
+
+def test_additive_intervention_leaves_applied_count_zero():
+    """Guards the channel_patch_l18 control path: additive ResidualStreamIntervention
+    (add/all_positions) legitimately leaves applied_count at 0, so callers must NOT assert
+    applied_count == 1 on it — that one-shot invariant is transport-only."""
+    model = _TinyLayerModel()
+    hidden = torch.zeros(1, 3, 2)
+    with ResidualStreamIntervention(
+        model, layer_idx=0, vector=np.array([1.0, 0.0], dtype=np.float32),
+        mode="add", scale=1.0, all_positions=True,
+    ) as add_ctx:
+        model(hidden)
+    assert add_ctx.applied_count == 0
+
+    with ProjectedTransportIntervention(
+        model, layer_idx=0, positions=[1],
+        donor=np.zeros((1, 2), dtype=np.float32), basis=np.array([[1.0, 0.0]], dtype=np.float32),
+    ) as tp_ctx:
+        model(hidden)
+    assert tp_ctx.applied_count == 1
