@@ -227,7 +227,11 @@ def main() -> None:
 
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     # Gated manifest = ALL original rows (with audio paths) annotated with recognized_both
-    # on attack rows, so channel_patch_l18.py can consume it directly.
+    # on attack rows, so channel_patch_l18.py can consume it directly. Also carry the
+    # fresh Qwen readouts H and M, and a first-token behavior_label = sign(M) at the
+    # readout endpoint (first_generation_prelogit) — this is the refused/complied split
+    # the Step-3 refusal-DiM positive control recomputes on THIS cohort (never Run 7).
+    out_by_path = {r["path"]: r for r in out_rows}
     gated_rows = []
     for row in rows:
         out = dict(row)
@@ -235,6 +239,13 @@ def main() -> None:
         if style != args.clean_style:
             key = (str(row["item_id"]), round(float(row.get("sign", 0.0)), 6), style)
             out["recognized_both"] = recog_by_key.get(key, False)
+        scored = out_by_path.get(row["path"])
+        if scored is not None:
+            out["H"] = scored["H"]
+            out["M"] = scored["M"]
+            out["predicted_correct"] = scored["predicted_correct"]
+            # first-token refusal-margin sign as the behavior label for the DiM control
+            out["behavior_label"] = "policy_refusal" if scored["M"] > 0 else "harmful_compliance"
         gated_rows.append(out)
     (out_dir / "pairs_gated.jsonl").write_text(
         "\n".join(json.dumps(r) for r in gated_rows) + "\n"

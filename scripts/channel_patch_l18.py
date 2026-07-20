@@ -86,13 +86,27 @@ def main() -> None:
     ap.add_argument("--family", default=None,
                     help="restrict to one attack style so the channel axis U is single-family "
                          "(recommended for the confirmatory; the GO gate is evaluated per family)")
+    ap.add_argument("--split-file", type=Path, default=None,
+                    help="frozen {item_id: train|dev|test} JSON shared with the Step-2 tau "
+                         "freeze (recognition_gate --dev-items). REQUIRED for a real gate so "
+                         "the pre-registered split is honored; without it the split would be "
+                         "re-randomized over the (outcome-dependent) recognized subset.")
+    ap.add_argument("--allow-unfrozen-split", action="store_true",
+                    help="permit deriving a fresh 60/20/20 split from --seed over the recognized "
+                         "subset when --split-file is absent (SMOKE ONLY: leaks pre-registered "
+                         "test items into the U fit; fails closed otherwise).")
     ap.add_argument("--layer", type=int, default=18)
     ap.add_argument("--arms", nargs="+", default=["A", "B"], choices=["A", "B"])
     ap.add_argument("--dose", type=float, nargs="+", default=[0.0, 0.25, 0.5, 1.0])
     ap.add_argument("--candidate-ranks", type=int, nargs="+", default=[1, 2, 3, 5])
     ap.add_argument("--min-reconstruction", type=float, default=0.6)
     ap.add_argument("--max-angle-rad", type=float, default=0.5)
-    ap.add_argument("--k-orth", type=int, default=30)
+    ap.add_argument("--k-orth", type=int, default=30,
+                    help="legacy global-additive orthogonal-null ensemble size (rig sanity only)")
+    ap.add_argument("--k-sham", type=int, default=20,
+                    help="matched projected-transport sham ensemble size: random rank-matched "
+                         "subspaces perp to U, patched with the SAME operator/support/dose as the "
+                         "channel axis (the valid specificity null; Codex 2026-07-19)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out-name", default="l18_patch.json")
     args = ap.parse_args()
@@ -113,7 +127,9 @@ def main() -> None:
         resolve_audio_position_indices,
     )
     from audio_safety.pipelines.channel_axis import (
+        largest_principal_angle,
         mean_anchored_basis,
+        reconstruction_ratio,
         refusal_dim_direction,
         select_rank,
     )
@@ -135,7 +151,28 @@ def main() -> None:
     if len(styles) > 1:
         print(f"WARNING: fitting ONE pooled channel axis U across families {styles}; "
               "pass --family <style> to fit a single-family U for the confirmatory.")
-    split = _split_items([p["item_id"] for p in pairs], args.seed)
+    if args.split_file is not None:
+        # Honor the frozen split shared with Step 2's tau freeze so clean-dev (tau),
+        # the U fit (train+dev), and the held-out test set are consistent across stages.
+        split = json.loads(args.split_file.read_text())
+        missing = sorted({p["item_id"] for p in pairs if p["item_id"] not in split})
+        if missing:
+            raise SystemExit(
+                f"--split-file lacks {len(missing)} manifest item(s), e.g. {missing[:3]}"
+            )
+    elif args.allow_unfrozen_split:
+        # SMOKE ONLY: _split_items depends on WHICH items are in the set, so deriving it
+        # over the recognized subset re-randomizes fold membership and leaks pre-registered
+        # test items into the U fit (research-code-reviewer, 2026-07-19).
+        print("WARNING: --allow-unfrozen-split: split re-derived over the recognized subset; "
+              "pre-registered test items may leak into the channel-axis U fit. SMOKE ONLY.")
+        split = _split_items([p["item_id"] for p in pairs], args.seed)
+    else:
+        raise SystemExit(
+            "refusing to re-randomize the train/dev/test split over the recognized subset "
+            "(leaks test items into the U fit). Pass --split-file <run>/inputs/splits.json for "
+            "a real gate, or --allow-unfrozen-split for a smoke test."
+        )
     for p in pairs:
         p["split"] = split[p["item_id"]]
 
@@ -205,15 +242,90 @@ def main() -> None:
     if not (train and dev and test):
         raise SystemExit(f"need non-empty train/dev/test (got {len(train)}/{len(dev)}/{len(test)})")
 
+    # select_rank holds dev out to choose the rank (train-fit basis, dev reconstruction +
+    # train/dev subspace stability); the FINAL basis is then fit on train+dev, consistent
+    # with the spec ("fit U on train+dev") and with the refusal-DiM / null pool below
+    # (research-code-reviewer, 2026-07-19).
     bases: dict[str, np.ndarray] = {}
     rank_info: dict[str, int] = {}
+    rank_ambiguous: dict[str, bool] = {}
+    rank_diag: dict[str, list] = {}
+    diag_rng = np.random.RandomState(args.seed)
+
+    def _subsample(m: np.ndarray, cap: int = 2000) -> np.ndarray:
+        # Arm A concatenates every audio token across pairs (tens of thousands of rows); a
+        # full SVD per candidate rank stalls when two processes run in parallel (BLAS thread
+        # thrash). The diagnostic only needs an APPROXIMATE spectrum, so subsample the rows.
+        if m.shape[0] <= cap:
+            return m
+        return m[diag_rng.choice(m.shape[0], cap, replace=False)]
+
     for arm in args.arms:
-        rank = select_rank(
-            support_diffs(train, arm), support_diffs(dev, arm), args.candidate_ranks,
-            min_reconstruction=args.min_reconstruction, max_angle_rad=args.max_angle_rad,
-        )
-        bases[arm] = mean_anchored_basis(support_diffs(train, arm), rank)
-        rank_info[arm] = int(rank)
+        td, dd = support_diffs(train, arm), support_diffs(dev, arm)
+        # Diagnostic (subsampled, approximate): dev reconstruction + train/dev subspace angle
+        # per candidate rank, so a select_rank failure ("channel not stable") is legible.
+        td_s, dd_s = _subsample(td), _subsample(dd)
+        diag = []
+        for rk in args.candidate_ranks:
+            try:
+                bt, bd = mean_anchored_basis(td_s, rk), mean_anchored_basis(dd_s, rk)
+                rec, ang = reconstruction_ratio(dd_s, bt), largest_principal_angle(bt, bd)
+                diag.append({"rank": rk, "dev_recon": round(rec, 4), "angle_rad": round(ang, 4)})
+                print(f"  [rank-diag {arm} r={rk}] dev_recon={rec:.3f} angle={ang:.3f}rad "
+                      f"(subsampled; need recon>={args.min_reconstruction} angle<={args.max_angle_rad})",
+                      flush=True)
+            except ValueError as e:
+                diag.append({"rank": rk, "error": str(e)})
+                print(f"  [rank-diag {arm} r={rk}] {e}", flush=True)
+        rank_diag[arm] = diag
+        # Real rank selection + basis fit on FULL data. If NO candidate rank is stable, this
+        # support has no reliable low-dim channel subspace -> fall back to the registered
+        # rank-1 difference-in-means (the nested baseline in the direction doc), FLAGGED as
+        # ambiguous, so this arm's causal test still runs but is not read as a confirmatory
+        # multi-rank channel. A stable arm proceeds normally; only ALL-arm failure is fatal.
+        try:
+            rank = int(select_rank(
+                td, dd, args.candidate_ranks,
+                min_reconstruction=args.min_reconstruction, max_angle_rad=args.max_angle_rad,
+            ))
+            ambiguous = False
+        except ValueError as e:
+            rank, ambiguous = 1, True
+            print(f"  [rank {arm}] AMBIGUOUS: {e} -> rank-1 DiM baseline (FLAGGED)", flush=True)
+        bases[arm] = mean_anchored_basis(support_diffs(train + dev, arm), rank)
+        rank_info[arm] = rank
+        rank_ambiguous[arm] = ambiguous
+        print(f"  [rank {arm}] selected={rank} ambiguous={ambiguous}", flush=True)
+
+    # ---- matched sham subspaces: random rank-matched bases perp to U, for a valid
+    # specificity null. The sham is patched with the SAME projected-transport operator,
+    # support, and dose as the channel axis U (Codex 2026-07-19: a global-additive
+    # orthogonal-null vector is NOT a matched null for a pair-specific projected transport).
+    # Each basis is a covariance-matched draw from the arm's displacement span, then
+    # orthogonalized against U's rowspace so the sham is a genuinely different direction.
+    def _sham_bases(arm: str) -> list[np.ndarray]:
+        diffs = support_diffs(train + dev, arm)  # (n, d)
+        u = bases[arm]
+        r = rank_info[arm]
+        n = diffs.shape[0]
+        out: list[np.ndarray] = []
+        for _ in range(args.k_sham):
+            rows: list[np.ndarray] = []
+            guard = 0
+            while len(rows) < r and guard < 200 * r:
+                guard += 1
+                v = (rng.standard_normal(n) @ diffs).astype(np.float64)  # covariance-matched
+                for b in list(u) + rows:
+                    v = v - (v @ b) * b
+                nv = float(np.linalg.norm(v))
+                if nv > 1e-8:
+                    rows.append(v / nv)
+            if len(rows) == r:
+                out.append(np.stack(rows))
+        return out
+
+    sham_bases = {arm: _sham_bases(arm) for arm in args.arms}
+    max_dose = max(float(d) for d in args.dose)
 
     # ---- refusal-DiM global control (RECOMPUTED on this cohort) + orthogonal null pool ----
     def _behavior_label(value: str | None) -> int:
@@ -277,6 +389,25 @@ def main() -> None:
                 arm_out["corrupt"][f"{scale}"] = transport_margin(
                     p["clean_inputs"], positions, attack_donor, basis, scale, p["t_ab"]
                 )
+            # MAGNITUDE-matched sham null: same restore operator/support, but each sham dose
+            # is rescaled so its L18 edit norm equals U's max-dose edit norm per pair, so
+            # "restore beats sham" reflects the DIRECTION U, not a larger edit (research-code-
+            # reviewer 2026-07-19: U captures most displacement energy, so ‖P_U δ‖ > ‖P_sham δ‖).
+            # delta = donor - receiver-state at the patched positions (= what the transport scales).
+            attack_states = p["attack_audio"] if arm == "A" else p["attack_read"][None, :]
+            delta = clean_donor - attack_states
+            u_proj = float(np.linalg.norm(delta @ basis.T))          # ‖P_U δ‖
+            sham_margins, sham_norms = [], []
+            for sb in sham_bases[arm]:
+                s_proj = float(np.linalg.norm(delta @ sb.T))         # ‖P_sham δ‖
+                sham_norms.append(s_proj)
+                mm_scale = max_dose * (u_proj / s_proj) if s_proj > 1e-9 else 0.0
+                sham_margins.append(
+                    transport_margin(p["attack_inputs"], positions, clean_donor, sb, mm_scale, p["t_ab"])
+                )
+            arm_out["sham_restore_max_dose"] = sham_margins
+            arm_out["u_proj_norm"] = u_proj
+            arm_out["sham_proj_norms"] = sham_norms
             row["arms"][arm] = arm_out
 
         # refusal-DiM global positive control (added at all positions on the attack pass)
@@ -305,10 +436,18 @@ def main() -> None:
 
     out = {
         "layer": args.layer,
+        "seed": args.seed,  # the sham ensemble (the GO-gating null) is drawn from this seed
+        "pairs_file": str(args.pairs),
+        "split_file": str(args.split_file) if args.split_file else None,
+        "clean_style": args.clean_style,
         "n_pairs": len(pairs),
         "n_train": len(train), "n_dev": len(dev), "n_test": len(test),
         "ranks": rank_info,
+        "rank_ambiguous": rank_ambiguous,
+        "rank_diagnostics": rank_diag,
         "dose": args.dose,
+        "k_sham": args.k_sham,
+        "n_sham_per_arm": {arm: len(sham_bases[arm]) for arm in args.arms},
         "refusal_dim_available": r_dim is not None,
         "results": results,
     }

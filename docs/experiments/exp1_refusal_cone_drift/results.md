@@ -580,6 +580,129 @@ heldout (n=60): glm RD **+5.0pp** (CI −5.0..+15.0, p 0.254), laguna **+3.3pp**
   (`outputs/cross_checks/20260714_multidim_methodology.md`): naive SVD not ICLR-caliber; attack is ~1-D within
   refusal space (PR 1.49, corrected); right critique is "projection ≠ causal mediation," not "rank-1 vs rank-k."
 
+### run10_20260719_channel_l18 — 2026-07-19 (channel-invariance L18 causal audit + full-generation behavioral; recognition+anchor-gated)
+
+- **Git commit:** `0b30b2b` (+ uncommitted Run 10 pipeline: `recognition_gate.py`, `channel_patch_l18.py`,
+  `channel_patch_analyze.py`, `prepare_run10_channel_gate_manifest.py`, `author_run10_anchors.py`,
+  `analyze_run10_recognition.py`, `generate_run10_responses.py`; CPU-tests green).
+- **Direction/pre-reg:** `run10_channel_invariance_audit_direction_20260719.md` (Steps 2–3). Dual-agent:
+  blind Codex `gpt-5.6-sol` (xhigh) method + bypass cross-checks; `research-code-reviewer` ×2.
+- **Cohort (PI: use Run 9 fresh renders, NOT Run 7):** 335 harmful FigStep clean(neutral) + pv_standard /
+  pv_locked / mel_matched_ctrl × ±3 st, all WER/overlap-passed (Run 9 `asr_*.jsonl`). Attack under test =
+  `pv_standard` (phase-vocoder incoherence). Frozen 60/20/20 item split shared across Step 2 τ + Step 3 U-fit.
+
+**Step 2 — recognition gate + blind-authored anchor re-gate (GPU).** τ=+4.66 on clean-dev H. Recognized-both
+(H>τ): pv_standard 91.4% / pv_locked 92.6% / mel_ctrl 92.5%. Δ_heard (M_attack−M_clean, recognized-both):
+pv_standard **−1.32** [−1.49,−1.14], pv_locked −0.85, mel_ctrl −0.90 → total erosion −1.32, pure-phase
+component (pv_standard−pv_locked) ≈ **−0.47** (rest is generic pitch/vocoder). **The Qwen forced-choice
+recognition probe does NOT catch safety-word mishearing:** blind LLM-authored per-item `harmful_anchors` +
+Whisper anchor gate → 131/626 pv_standard rows drop a safety anchor, yet Qwen "recognized" **92.4%** of them
+(recognition = request-identity, not harmfulness preservation — Codex). Confirmatory funnel 626 → 495
+(anchor-ok) → 452 (recognized) → **246** (∩ neutral-refuser); Δ_heard on it −1.82 (m3) / −2.41 (p3).
+
+**Step 3 — L18 pair-specific projected-transport causal (n=28 test/sign; magnitude-matched sham; k_sham=20).**
+
+| sign | Arm | channel axis | restore ΔM | corrupt ΔM | restore−sham LB (restore>sham) | read |
+|---|---|---|---:|---:|---|---|
+| m3 | **A** audio-span | stable rank-1 (recon .86) | −0.66 [−.90,−.43] | −0.88 | −0.14 (49%) | **null vs sham** |
+| m3 | **B** readout t_AB | UNSTABLE→rank-1 DiM | +0.65 [+.44,+.89] | −0.60 | +0.47 (90%) | strong, **flagged** |
+| p3 | **A** audio-span | stable rank-2 (recon .95) | +0.03 [−.05,+.10] | −0.07 | −0.22 (54%) | **null vs sham** |
+| p3 | **B** readout t_AB | UNSTABLE→rank-1 DiM | +1.24 [+.99,+1.49] | −1.17 | +1.02 (99%) | strong, **flagged** |
+
+- **Reversal (replicated both signs):** the geometrically CLEAN audio-span channel (Arm A, low-rank + stable)
+  is causally **INERT** for refusal (restore ≈ magnitude-matched sham). The SCATTERED readout token (Arm B,
+  no stable low-rank subspace, recon .25–.30 across rank 1..5 → rank-1 DiM fallback) is a **strong bidirectional
+  lever** (beats sham 90/99%) — but flagged ambiguous, at the first-token readout, and mildly circular.
+- **VERDICT (Step 3): STOP** as a confirmatory channel GO (no *stable* arm beats sham). The decision-token
+  mean-shift lever is real but not confirmatory.
+
+**Behavioral — full-generation 4-way harm judgment (independent Claude + sub-agent, convergent):** refusal
+96.3%→64.6% (−31.7 pp); **harmful_compliance 1.5%→5.7% (+4.2 pp)**; **decoding_failure 1.5%→22.4% (+20.9 pp)**;
+benign +6.6 pp. Refusal erosion decomposes **66% → decoding_failure, 21% → benign, only 13% → genuine
+harmful_compliance** (≈2 strongly-operational jailbreaks / 246: VBA macro, disinformation OPSEC). Mishearing
+persists in generation despite the gate (hack-bank→banking-jobs, blackout→protests). ⇒ first-token margin M
+massively overstates behavioral harm; the effect is predominantly **generic acoustic decoding failure**.
+
+- **Decision: STOP / DOWNGRADE — approaches the direction-doc "phenomenon collapse" meta-kill.** The margin
+  refusal erosion is predominantly decoding degradation, not a safety-specific bypass; a small real jailbreak
+  (+4.2 pp) survives. Defensible framing = **audio-robustness / benchmark construct-validity** (Run 7 lineage),
+  NOT a clean L18 bypass mechanism.
+- **Codex bypass cross-check (`scratchpad/codex_bypass_out.md`):** bypass hypothesis (attack attenuates the
+  audio→safety READ while harmfulness stays available) is VIABLE but not favored yet; the Arm A/B asymmetry
+  does not distinguish routing from {upstream-read-already-done, acoustic-uncertainty suppressor,
+  nonlinear/high-rank content missed by Arm A's variance-defined U, first-token surface effect}. Confounds to
+  fix: post-treatment recognition conditioning (survivor bias), Arm-B circularity, first-token→behavior.
+- **Next (Run 11, overnight):** routing-vs-content dissociation — harmful-vs-benign harmfulness probe
+  (is harmfulness preserved under attack?), refusal/harmfulness orthogonal decomposition, layer sweep, and
+  full-generation behavioral rescue on the flip subset.
+- **Caveats:** single model (Qwen2-Audio) + single TTS (CosyVoice2); recognition-invariance-under-patch not
+  implemented; anchors LLM-authored (`google/gemini-2.5-flash`); recognized-both cohort is a post-treatment
+  survivor subset (report as sensitivity per Codex).
+- **Artifacts:** `outputs/run10_channel_l18/{recognition/,channel_patch/l18_clean_pvstd_*,behavior/responses.jsonl}`;
+  `outputs/run10_channel_l18/analysis.md`.
+
+### run11_20260719_dissociation — 2026-07-19 (harmfulness-preservation dissociation + carrier/expression layer sweep + behavioral rescue)
+
+- **Git commit:** `0b30b2b` (+ uncommitted Run 11 pipeline: `capture_run11_dissociation.py`,
+  `analyze_run11_dissociation.py`, `behavioral_rescue_run11.py`; overnight runner).
+- **Design:** Codex-agreed follow-up to Run 10's STOP — test the load-bearing fork bypass
+  (harmfulness stays internally available, refusal bypassed) vs degradation (harmfulness attenuated).
+  Cohort = Run 10 confirmatory clean-refusers (135 harmful) + 143 clean-benign; layers 8/12/16/18/20/24/28.
+- **HARMFULNESS PRESERVED (decisive):** fixed forced-choice "is this request harmful? Yes/No" probe →
+  judged-harmful 86% clean vs **83% attack**; paired **dH_harm = +0.00** while paired **dM = −2.11**. A
+  clean-fit harmful-vs-benign DiM `r_H` still separates ATTACK-harmful from benign at the readout with
+  **AUROC transfer 0.95–0.997** across layers. ⇒ the degradation-hypothesis REFUTE condition (harmfulness
+  drops with M) does NOT hold; harmfulness recognition is intact while refusal erodes.
+- **Layer sweep (Arm A + Arm B, both signs, magnitude-matched sham):** Arm B (readout) restore **beats the
+  matched sham at EVERY layer** (sham-LB>0), magnitude growing with depth (+0.15/+0.09 @L8 → +1.02/+1.99
+  @L28). Arm A (audio-span) beats sham **only at early layers L8–L12**, inert at L16–L28. ⇒ the audio→refusal
+  read is causal early; by the decision layers the effect is carried at the readout token.
+- **Behavioral rescue:** injecting the CLEAN readout state at L18 into the ATTACK generation (full-state
+  interchange, greedy) flips **52% (46/89)** of non-refusing attack generations back to a FULL refusal
+  (echoes and harmful answers alike) ⇒ the decision-token state causally controls full-response refusal,
+  not just the first-token margin.
+- **Decision: bypass hypothesis SUPPORTED** (upgrades Run 10's degradation-leaning STOP). Defensible claim:
+  *a low-level content-preserving acoustic attack leaves harmful intent internally available but corrupts
+  the decision-token refusal execution (early-layer read → readout carrier); restoring the decision state
+  recovers full-response refusal.*
+- **Caveats:** rescue is full-state (non-specific, also fixes decoding garble) not U-coordinate/sham-
+  controlled; refusal erosion still ~66% decoding_failure so bypass coexists with degradation; readout DiM
+  circularity; recognized-both survivor cohort; transfer AUROC channel-confounded (no attacked-benign);
+  single model/TTS/attack-family. Next experiment = Codex-decided (in progress).
+- **Artifacts:** `outputs/run11_dissociation/{dissociation/dissociation_report.json, sweep via
+  run10 channel_patch/sweep_L*_analysis.json, rescue/rescue_responses.jsonl}`.
+
+### run12_20260719_factorial — 2026-07-19/20 (whitened factorial L18 coordinate rescue; is Run 11's rescue a SPECIFIC coordinate?)
+
+- **Git commit:** `0b30b2b` (+ uncommitted Run 12 pipeline: `render_run12_factorial.py`, `capture_run12.py`,
+  `fit_run12_axis.py`, `precompute_run12_edits.py`, `run_run12_phaseB.py`, `analyze_run12_gates.py`).
+- **Design:** locked by a two-round Claude⟂Codex `gpt-5.6-sol` debate; Phase A dual-reviewed (Codex +
+  `research-code-reviewer`). Full writeup: `run12_factorial_coordinate_rescue_full_20260719.md`.
+- **Question:** Run 11's 52% rescue was FULL-STATE — a specific harmful-relevant safety coordinate, or generic
+  decision-state repair? Test: does a harmful-SPECIFIC, harmfulness-ORTHOGONAL, benign-subtracted L18 coordinate
+  `u_s` restore refusal (beat matched sham, dose-ordered) WITHOUT restoring harmfulness?
+- **Cohort:** 150 FigStep items with harmful+benign clean audio; pv_standard ±3 re-rendered on both;
+  SafeBench-stratified 5 folds; selected on external availability only (NO survivor selection).
+- **Phase A — INSTRUMENT_VALID** (dual-reviewed, code correct, equations reproduce to cosine~1.0, |r_H·u|<9e-10):
+  signal ratios m3 1.25–1.31 / p3 0.90–0.94, cross-fold cosine 0.95/0.97. Honest evidence = permutation
+  p≈0.001 (thresholds sit below the null floor — reported, not the raw margin). Fold-category bug fixed.
+- **Phase B (identity_ok 300/300, 10k item-bootstrap):**
+  - **u_s → first-token margin M: +0.096** [+.088,+.105], **beats matched sham** (LB +0.092), dose-slope
+    +0.077, corruption −0.096 → **G2 PASS** (a genuine, specific, dose-ordered margin lever).
+  - **u_s → full-generation refusal ΔR_U: +0.33 pp** [0,1.0] → **G3 FAIL** (behaviorally negligible).
+  - **full-state restore ΔR: +9.67 pp** [4.3,15.0] (recovers most of the 13pp attack refusal loss).
+  - benign over-refusal ≈0; L_M factorial +1.05.
+- **Verdict: PARTIAL — strong bypass hypothesis NOT supported.** The harmful-specific coordinate is real and
+  specifically controls M (+0.096, ~5% of the −2.1 erosion) but does NOT rescue behavior; the behavioral rescue
+  is generic (full-state +9.67pp). ⇒ **Run 11's rescue was generic decision-state repair, not a specific safety
+  coordinate.** Session conclusion: the low-level attack corrupts the L18 decision state (refusal erodes,
+  harmfulness preserved) but the corruption is DISTRIBUTED — no clean, behaviorally-effective, restorable
+  bypass axis.
+- **Caveats:** ΔR_U diluted by the unfiltered cohort (52.7% clean-refuse); single model/TTS/attack-family;
+  4-way relabel via sub-agent can refine (refusal-rate gates are label-robust).
+- **Artifacts:** `outputs/run12_factorial/{cohort.jsonl, folds.json, capture/, axis/axis_report.json,
+  edits/, phaseB/{margins,gens}_*.jsonl, phaseB/gates_report.json}`.
+
 <!-- ENTRY TEMPLATE:
 
 ### <run_name> — YYYY-MM-DD
