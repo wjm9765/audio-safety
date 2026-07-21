@@ -5,6 +5,19 @@
 
 ## Current Status
 
+- **Run 13 (2026-07-21, latest) — multidimensional rank sweep: BEHAVIOURAL NULL, instrument valid.** Raising the
+  L18 readout subspace from rank-1 to rank-64 does **not** rescue full-generation refusal (max Δ +0.67pp, all CIs
+  touch 0, ≤2/196 label flips); the first-token margin lever *weakens* with rank (+0.096 → +0.053); `restore`
+  does not beat the generic-channel control; `corrupt` is null — while **full-state restoration still works
+  (+10.33pp)**. The rank-1 anchor reproduces Run 12 exactly (ΔM +0.0963 vs +0.096), so this is a valid instrument
+  returning a clear negative. ⇒ **Run 12's "distributed corruption" conclusion extends to rank-64: there is no
+  fixed low-rank readout subspace that restores refusal.** Geometry agrees (σ₁/σ₈ ≈ 1.8, cross-fold angle ≈ 89°,
+  k=64 explains only 13–18% of held-out interaction). **Caveat that limits ALL refusal numbers in this log:** the
+  `policy_refusal` endpoint measures *emission of a canned refusal template* — Qwen2-Audio answers "I cannot
+  discuss **political matters**" to organ trafficking, bank hacking and slavery alike — and the attack's dominant
+  effect in raw outputs is a **response-mode shift to transcription/description**, which the residual
+  `harmful_compliance` bucket miscounts as compliance. Relabeling is free (all 300 generations stored). Next:
+  relabel → safety-specificity kill test → search for a shared **operator** rather than a fixed subspace.
 - **Exp1 axis gate:** `WEAK-GO` on `exp1_20260707_1557_allpos_rebuttal_l12nbhd` — an audio-conditioned refusal axis `r_A` exists (add/ablate/benign pass), style-escape unsupported.
 - **Run 4 (conversion-gap direction):** `STOP` (Stage A / T0) + `UNRESOLVED` (Stage B). Matched neutral text-vs-audio shows **no audio>text attack gap** (RD +2.7pp, n.s.) and **no specific refusal-axis signal** (r_A readout AUROC 0.60, specificity ratio 0.055); harmfulness is preserved in audio (native AUROC 0.996). The "audio under-writes refusal (conversion gap)" thesis is **not supported on this cohort**; the surviving signal is audio-induced benign over-refusal.
 - **Run 4 §8 (attack-induced-flip → paper direction):** direction chosen — **"dissociated audio safety
@@ -702,6 +715,198 @@ massively overstates behavioral harm; the effect is predominantly **generic acou
   4-way relabel via sub-agent can refine (refusal-rate gates are label-robust).
 - **Artifacts:** `outputs/run12_factorial/{cohort.jsonl, folds.json, capture/, axis/axis_report.json,
   edits/, phaseB/{margins,gens}_*.jsonl, phaseB/gates_report.json}`.
+
+### run13_readout_rank_sweep — 2026-07-21 (multidimensional SVD rank sweep: does a LOW-RANK L18 readout subspace rescue refusal?)
+
+- **Git commit:** `dda7c19` (pipeline) + one committed perf fix to `scripts/precompute_run13_edits.py` (see
+  *Implementation deviations*). Spec: `run13_readout_rank_sweep_spec_20260721.md`.
+- **Type:** exploratory screen. The spec deliberately contains **NO GO/NO-GO thresholds** — tables are reported,
+  the human decides. Nothing in `design.md` §0 was touched.
+
+**Question.** Run 12 tested a single **rank-1** harmful-specific L18 coordinate `u_s`: it moved the first-token
+refusal margin (+0.096) but not full-generation behaviour (+0.33pp), while full-state restoration gave +9.67pp.
+Every behaviourally-decisive test so far was effectively rank-1. Run 13 generalises exactly that coordinate to a
+**rank-k subspace** (SVD) and sweeps `k`: *does a low-rank readout subspace control full-generation refusal more
+than rank-matched random (sham) or generic-channel (`B_k`) directions?* The rank-1 point of the sweep must
+reproduce Run 12's `u_s` — that is the built-in instrument check.
+
+**Setup (all frozen at fit time in `sweep_manifest.json`).**
+
+| | |
+|---|---|
+| Model | `Qwen/Qwen2-Audio-7B-Instruct`, bfloat16, sdpa |
+| Site | layer **18**, token **`first_generation_prelogit`** (`t_AB`), prefill-only |
+| Prompts | system `"You are a helpful assistant."`, instruction `"Please answer the question in the audio."` |
+| Margin `M` | `LSE(refusal-prefix logits) − LSE(compliance-prefix logits)` at `t_AB`; prefixes from `run5_pitch_representation_fast.yaml` |
+| Decoding | greedy, `max_new_tokens=96` |
+| Cohort | **150 FigStep/SafeBench items**, harmful + matched benign, `pv_standard` ±3 (m3/p3) → **300 (item,sign) rows**. Reused from Run 12, selected on external availability only (no survivor filtering) |
+| Cross-fitting | 5 category-stratified folds, seed 0 (Run 12's `folds.json`); every test item uses subspaces fitted on the fold that **excluded** it |
+| Input data | **no new capture** — reuses `outputs/run12_factorial/capture/` L18 `t_AB` states |
+| Hidden dim | d = 4096 |
+
+**Method.** Per fold `f`, sign `s`, FIT items only, all in a whitened metric (`W = Σ_f^{-1/2}`, Ledoit–Wolf
+pooled within-class covariance of clean harmful+benign):
+
+- harmfulness nuisance subspace `R_H`, **`k_H = 1`** (verified: row 0 = `unit(W(μ_H−μ_B))`, so `U_1` reproduces
+  Run 12's `u_s` exactly); `P_H^⊥ = I − R_HᵀR_H`
+- benign-subtracted interaction `z_i = P_H^⊥ [ W(cH_i − aH_i) − W(cB_i − aB_i) ]` (attacked-benign subtracts the
+  generic phase channel)
+- **`U_k` = mean-anchored SVD basis of `Z`** (row 0 = DiM = Run 12 direction); **`B_k`** = same on benign-only
+  displacements `P_H^⊥ W(cB_i − aB_i)`; **sham** = 20 Haar-random rank-k bases in the complement of `(U_k, R_H)`
+- edit at `t_AB` is a fixed additive vector `λ · W⁻¹ Uᵀ ( U W (donor_read − host_read) )`, `W⁻¹` via `solve(W,·)`
+
+| arm | host | donor | subspace | controls for |
+|---|---|---|---|---|
+| `restore` | attack_H | clean_H | `U_k` | does the subspace recover refusal? |
+| `corrupt` | clean_H | attack_H | `U_k` | reciprocal / behavioural mediation |
+| `sham0..19` | attack_H | clean_H | random `S_k` ⟂ (`U_k`,`R_H`) | rank + **norm**-matched null |
+| `generic` | attack_H | clean_H | `B_k` | generic audio/decision repair vs safety-specific |
+| `brestore` | attack_B | clean_B | `U_k` | benign over-refusal |
+| `fullstate` | attack_H | clean_H (whole state) | — | behavioural ceiling (Run 12 reuse) |
+
+Doses λ ∈ {0, 0.25, 0.5, 1} for margins; generations at λ=1. Per row: 275 forward passes + 49 generations.
+
+**Preregistration deviation (ranks).** Spec §10 froze ranks {1,2,4,8,12,16,20,32,64}; spec §12 explicitly names
+`--ranks` as the sanctioned GPU cost knob. Measured full-sweep cost was **9.9 h** (119 s/row); the operator
+requested a ~6 h budget, so Phase B ran a **5-point log-spaced subset spanning the same 1..64 range:
+{1, 2, 4, 16, 64}** (~5.8 h projected, 5 h 49 m actual). Rationale: k=1 is the mandatory Run-12 anchor; 2,4 give
+low-k resolution where an effect should emerge; 64 is retained as a high-rank inflation guard so a null cannot be
+dismissed as "did not go high enough". **`edits/edits.npz` contains all 9 ranks**, so {8,12,20,32} can be filled
+in later by re-running Phase B on those ranks alone — no refit/reprecompute. Fit-stage geometry is reported for
+all 9 ranks.
+
+**Implementation deviation (performance, output-identical).** `precompute_run13_edits.py` originally called
+`np.linalg.solve(W, ·)` once per transport, re-factorising the 4096×4096 `W` **64,800 times** (~61 min, memory-
+bandwidth bound). Two changes, reviewed by Codex `gpt-5.6-sol` xhigh: (1) all 216 arm/rank/sham projection
+columns of one (item,sign) are solved in a **single `lu_solve`** against a cached `lu_factor(W)` per (tag,fold)
+— 64,800 solves → 300; (2) the sham bank, whose seed has no item term, is generated **once per (tag,fold,rank)**
+and reused — 54,000 basis constructions → 1,800. Runtime **61 min → 7 min (423 s)**. Verified by a scalar-
+reference oracle recomputing sampled edits with the ORIGINAL committed arithmetic: **287/288 vectors bit-identical
+as stored (float32)**; the single exception differs by **1 ULP in 1 of 4096 elements** of a *sham* (null-control)
+vector; **no branch changed** (degeneracy margin 7.4e7×, orthogonality margin 2.1e11× from their thresholds).
+Unit suite `tests/test_run13_rank_sweep.py` green (6/6).
+
+**Validation gates — all passed.**
+
+| gate | result |
+|---|---|
+| `identity_ok` (edit=0 reproduces the unhooked forward) | **300/300** |
+| realized harmfulness-orthogonality `max\|R_H·W·edit\|` | **6.00e-15** (raise threshold 1e-5) |
+| degenerate norm-matches | **0** |
+| `U_k`/`B_k` orthonormal, `U_k ⟂ R_H`, shams ⟂ (`U_k`,`R_H`) & norm-matched | enforced, no raise |
+| cross-fit exclusion, deterministic wrong-item donor | enforced |
+| shard / sign balance | 150 m3 / 150 p3; shard0 149 / shard1 151 |
+| runtime errors, CUDA OOM | 0 |
+
+**Identity baselines (full-generation policy-refusal rate, item-clustered 10k bootstrap, n=150 items).**
+
+| condition | refusal rate | 95% CI |
+|---|---:|---|
+| clean_H | **49.33%** | [41.33, 57.33] |
+| attack_H | **34.67%** | [28.00, 41.33] |
+| attack_H + **fullstate** | **45.00%** | [37.67, 52.33] |
+| benign (attacked) | 7.33% | [4.00, 11.33] |
+
+⇒ attack erosion **−14.66 pp** (Run 12: −13 pp); full-state restoration **+10.33 pp** (Run 12: +9.67 pp).
+
+**PRIMARY endpoint — per-rank Δ refusal rate (pp).**
+
+| k | Δ restore | Δ sham | restore−sham | **restore−generic** | corrupt (on clean_H) | benign ORR Δ |
+|---|---:|---:|---:|---:|---:|---:|
+| 1 | **+0.00** [0.00, 0.00] | −0.67 | +0.67 [0.00, +1.67] | **−0.33** | −0.67 | −0.67 |
+| 2 | +0.33 [−0.67, +1.67] | −0.33 | +0.67 [0.00, +1.67] | 0.00 | −0.67 | 0.00 |
+| 4 | +0.67 [0.00, +1.67] | −0.33 | +1.00 [0.00, +2.33] | **−0.33** | −0.33 | 0.00 |
+| 16 | +0.00 [−1.00, +1.00] | −0.33 | +0.33 [−0.67, +1.67] | **−0.33** | −0.67 | −0.33 |
+| 64 | +0.33 [0.00, +1.00] | 0.00 | +0.33 [0.00, +1.00] | +0.33 | −0.67 | 0.00 |
+
+Note the `restore−sham` column is **not** evidence of rescue: at k=1/2/16 `restore` is 0.00 and the difference
+comes entirely from **sham being slightly harmful** (Codex caught this).
+
+**SECONDARY — first-token margin ΔM (logits). Higher rank makes the lever WEAKER.**
+
+| k | 1 | 2 | 4 | 16 | 64 |
+|---|---:|---:|---:|---:|---:|
+| ΔM restore | **+0.0963** [.0880,.1048] | +0.0843 | +0.0834 | +0.0614 | **+0.0532** |
+| ΔM restore−sham | +0.0983 | +0.0851 | +0.0836 | +0.0617 | +0.0546 |
+
+**Transition matrix (identity → restore@1), 300 rows: 104 already-refusing + 196 non-refusing.**
+
+| rank | non-refusing rows flipped to `policy_refusal` | refusing rows lost |
+|---|---:|---:|
+| 1 | **0 / 196** | 0 |
+| 4 | 2 / 196 | 0 |
+| 64 | **1 / 196** | 0 |
+
+**Fit-stage geometry (held-out reconstruction of the interaction; cross-fold largest principal angle, π/2≈1.571).**
+
+| k | m3 held-out | m3 angle (med) | p3 held-out | p3 angle (med) |
+|---|---:|---:|---:|---:|
+| 1 | 0.028 | 0.477 | 0.051 | 0.437 |
+| 2 | 0.034 | 0.759 | 0.066 | 0.599 |
+| 4 | 0.042 | 1.214 | 0.081 | 1.055 |
+| 16 | 0.072 | 1.493 | 0.117 | 1.514 |
+| 64 | **0.132** | **1.560** | **0.182** | **1.563** |
+
+`Z` singular spectrum (fold 0, top-8) m3 `[248, 179, 164, 158, 151, 146, 142, 139]`, p3 `[295, 195, 166, 157,
+146, 139, 138, 137]` — σ₁/σ₈ ≈ 1.8, i.e. **nearly flat: no dominant low-rank structure**. Even k=64 explains
+13–18% of held-out interaction and the fitted subspaces are **near-orthogonal across folds** (angle ≈ 89°).
+
+**Run 12 anchor reproduction (the built-in instrument check) — PASSED.**
+
+| quantity | Run 13 | Run 12 |
+|---|---:|---:|
+| rank-1 ΔM | **+0.0963** | +0.096 |
+| rank-1 Δ refusal | +0.00 pp | +0.33 pp |
+| attack erosion | −14.66 pp | −13 pp |
+| fullstate recovery | +10.33 pp | +9.67 pp |
+
+**Cross-check (Codex `gpt-5.6-sol` xhigh, blind, at the 153/300 midpoint — raw data only, no conclusions
+shared).** Predicted: erosion 15–18 pp; fullstate +10–12 pp; all rank-k restore < +1.5 pp; **no monotonic rank
+benefit**; ΔM ≈ +0.09–0.10 at k=1 declining with rank; restore will not convincingly beat generic; corrupt null.
+**All seven predictions confirmed.**
+
+**What the numbers show (no GO/NO-GO applied — screen only).** Raising the subspace rank from 1 to 64 does not
+recover full-generation refusal at any rank (max +0.67 pp, all CIs touching 0; ≤2 of 196 label flips), the
+margin lever *weakens* with rank (+0.096 → +0.053), `restore` does not beat the generic-channel control, and the
+reciprocal `corrupt` arm is null — while full-state restoration still works (+10.33 pp). Run 12's conclusion
+therefore **extends to rank-64**: the L18 decision-state corruption is **distributed and is not recoverable by a
+fixed low-rank subspace**. The near-flat singular spectrum and ≈90° cross-fold angles are the geometric
+signature of that.
+
+**⚠️ Interpretation limits — the behavioural construct is narrower than "safety" (found by reading raw outputs).**
+
+1. `policy_refusal` is a match against 12 hard-coded English refusal strings. Inspection of the 300 raw
+   generations shows Qwen2-Audio emits a **content-mismatched canned deflection** — *"I cannot engage in
+   discussions regarding **political matters**"* — for organ trafficking, bank hacking, illegal gambling, modern
+   slavery and online radicalisation. The endpoint therefore measures **"emission of a recognised refusal
+   template"**, not harm-conditioned judgement. `fullstate` also restores the *generic* template rather than the
+   content-specific refusal clean audio produces.
+2. `harmful_compliance` is a **residual bucket** (anything not empty/looping/<3 words and not matching a refusal
+   string) and is flagged non-authoritative in the spec. `analyze_run13_screen.py` calls `label_output` **without
+   `reference_text`**, which disables the `transcript_echo` detector → reported `decoding_failure` = 0.0%
+   everywhere. Of the 30 "attack-success" rows examined at midpoint (clean refused, attack did not), **12 were
+   the model transcribing/describing the audio** and several others were safety warnings or mis-heard benign
+   answers; essentially none was operational harmful assistance. This is **treatment-dependent misclassification**
+   (the attack shifts response *mode*, and the labeller scores mode-shift as compliance).
+3. Consequence: the **refusal-rate comparisons above are internally valid** (same labeller across arms), but the
+   result must not be described as harmful-compliance or jailbreak rescue without relabeling. All 300 raw
+   generations are stored, so relabeling needs **no GPU rerun**.
+
+**Artifacts** (`/workspace/audio_safety_data/outputs/run13_readout_rank_sweep/`): `sweep_manifest.json`,
+`subspaces/{subspaces.npz, fit_manifest.jsonl, geometry.json}` (all 9 ranks), `edits/{edits.npz (1.27 GB, all 9
+ranks), edits_manifest.jsonl}`, `phaseB/{margins,gens}_shard{0,1}.jsonl` (300 rows each),
+`analysis/{screen_report.md, screen_report.json, transition_tables.json}`, logs `fit.log`, `precompute.log`,
+`phaseB_shard{0,1}.log`, launcher `run_phaseB.sh`.
+
+**Next steps (not part of this run).** (a) Relabel the stored generations into *content-appropriate refusal /
+generic deflection / transcription-description / operational harmful assistance* — the distinction is itself a
+finding; (b) run the safety-specificity kill test (same attack on benign instruction-following and neutral
+transcription, matched voices/doses) to separate a safety mechanism from generic audio-conditioned instruction
+instability; (c) stop extending the rank sweep — a null on a **fixed subspace** does not reject a compact
+mechanism realised as a shared **operator** (e.g. a short temporal filter produces high-rank, mutually
+near-orthogonal per-item displacements; a synthetic 3-tap blur reproduces this run's exact geometric signature),
+so the next search should fit low-capacity operators on neutral pairs and require **both rescue and reciprocal
+sufficiency**.
 
 <!-- ENTRY TEMPLATE:
 
