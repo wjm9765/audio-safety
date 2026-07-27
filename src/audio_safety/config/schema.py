@@ -30,6 +30,16 @@ class ModelConfig(StrictModel):
     dtype: str = "bfloat16"
     device_map: str = "auto"
     attn_implementation: str = "sdpa"
+    # Loader family. "qwen2_audio" keeps the exp1 path byte-identical; every other
+    # value routes through the generic transformers Auto* path in
+    # ``audio_safety.models.hf_audio_lm``. Adding a model must not change how an
+    # existing config loads.
+    loader: str = "qwen2_audio"
+    # Pin the HF revision so a rebuilt cache is the same weights. None = repo default.
+    revision: str | None = None
+    # MiniCPM-o / Kimi-Audio ship custom modeling code on the Hub and cannot load
+    # without this. Keep it False for models that do not require it.
+    trust_remote_code: bool = False
 
 
 class ConeConfig(StrictModel):

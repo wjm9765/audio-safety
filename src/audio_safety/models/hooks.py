@@ -8,10 +8,18 @@ the token index from the same Qwen chat template used for inference.
 from collections.abc import Iterable
 from typing import Any
 
+# Resolution is best-effort and ordered most-specific first. The Qwen2-Audio entries
+# are verified by exp1 runs. The exp2 entries (MiniCPM-o, Kimi-Audio, Ultravox) are
+# derived from published model cards and are UNVERIFIED against real weights —
+# confirm each on GPU before trusting any activation captured through it.
 DECODER_LAYER_PATHS = (
     "model.language_model.layers",
     "language_model.layers",
     "language_model.model.layers",
+    # MiniCPM-o-2.6 wraps its Qwen2 backbone as ``.llm`` (exp2, unverified).
+    "llm.model.layers",
+    "model.llm.model.layers",
+    "llm.layers",
     "model.layers",
     "layers",
 )
@@ -19,11 +27,19 @@ DECODER_LAYER_PATHS = (
 AUDIO_TOWER_PATHS = (
     "model.audio_tower",
     "audio_tower",
+    # MiniCPM-o-2.6 names its Whisper-derived audio module ``apm`` (exp2, unverified).
+    "apm",
+    "model.apm",
+    "audio_encoder",
+    "model.audio_encoder",
 )
 
 MULTIMODAL_PROJECTOR_PATHS = (
     "model.multi_modal_projector",
     "multi_modal_projector",
+    # MiniCPM-o-2.6 audio projector (exp2, unverified).
+    "audio_projection_layer",
+    "model.audio_projection_layer",
 )
 
 

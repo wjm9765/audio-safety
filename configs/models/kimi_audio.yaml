@@ -1,0 +1,26 @@
+# exp2 SECONDARY model — the architectural instrument.
+#
+# Why this model:
+#   - Its 12.5 Hz audio tokenizer emits BOTH discrete semantic tokens AND continuous
+#     acoustic features. That dual stream is the only architecture in the pool that
+#     offers a direct intervention site for the actual research question: ablate or
+#     patch the acoustic stream while holding the semantic stream fixed, and ask
+#     whether acoustic information reaches refusal independently of lexical content.
+#   - MMSU paralinguistic accuracy 59.28% (second only to Qwen2.5-Omni's 60.57%),
+#     i.e. it genuinely "listens" more than most - which by the VoxParadox
+#     (2605.27772) account is what should route acoustics into the decision.
+#   - SALMONN-Guard (2511.10222): 70.05% ASR under compositional speech-audio attacks.
+#
+# MANDATORY precondition: the "semantic" and "acoustic" streams are architectural
+# NAMES. Before either is used as an instrument, verify empirically that the semantic
+# stream is acoustics-free and the acoustic stream is semantics-free. If they are
+# entangled, the privileged-intervention argument collapses.
+model_id: moonshotai/Kimi-Audio-7B-Instruct
+loader: hf_auto_multimodal
+trust_remote_code: true
+dtype: bfloat16
+device_map: auto
+attn_implementation: sdpa
+revision: null # pin to a commit sha before the confirmatory phase
+# Ships custom modeling code; may additionally require its own inference package.
+# Resolve that as a documented dependency, not an ad-hoc pip install (AGENTS.md).

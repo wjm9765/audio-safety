@@ -1,0 +1,24 @@
+# exp2 PRIMARY model.
+#
+# Why this model (see docs/experiments/exp2_acoustic_refusal_transport/direction.md):
+#   - Jailbreak-AudioBench (2501.13772): ASR 18.2% -> ~65.7% under audio editing.
+#   - Emotion-variations (2510.16893) Table 1: neutral unsafe rate 3.27% (i.e. it is
+#     actually aligned, so there is a refusal mechanism worth studying) while showing
+#     the LARGEST null-calibrated acoustic excess of all 10 models (+0.621 logits vs
+#     null E[range] 0.367).
+#   - Multi-accent jailbreaking (2504.01094): named as "particularly high susceptibility".
+#   - SALMONN-Guard (2511.10222): 77.95% ASR under compositional speech-audio attacks.
+#
+# Caveat carried into the design: most of those large published ASRs come from
+# ADAPTIVE / compositional attacks. Fixed single-factor arm headroom is UNCONFIRMED
+# and is exactly what the exp2 screening phase must establish first.
+model_id: openbmb/MiniCPM-o-2_6
+loader: hf_auto_multimodal
+trust_remote_code: true
+dtype: bfloat16
+device_map: auto
+attn_implementation: sdpa
+revision: null # pin to a commit sha before the confirmatory phase
+# ~8B; fits a single A40-48GB in bf16. Conversation adapter and readout-position
+# resolution are NOT implemented yet (hf_audio_lm raises NotImplementedError) —
+# they must be written against the official model card and verified on GPU.

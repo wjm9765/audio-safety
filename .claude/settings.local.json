@@ -6,7 +6,9 @@
       "WebFetch(domain:arxiv.org)",
       "Bash(git -C /Users/wjm/Desktop/2026Files/ICLR_AudioSafety/audio_safety log --oneline -10)",
       "Bash(git -C /Users/wjm/Desktop/2026Files/ICLR_AudioSafety/audio_safety show --stat 9826bec)",
-      "Bash(git -C /Users/wjm/Desktop/2026Files/ICLR_AudioSafety/audio_safety show --stat 7e64c90)"
+      "Bash(git -C /Users/wjm/Desktop/2026Files/ICLR_AudioSafety/audio_safety show --stat 7e64c90)",
+      "Bash(awk '{$1=\"\"; print}')",
+      "mcp__codex__codex"
     ]
   },
   "enabledMcpjsonServers": [

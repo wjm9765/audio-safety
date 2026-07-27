@@ -1,0 +1,21 @@
+# exp2 THIRD model — lowest-engineering-risk interpretability substrate.
+#
+# Why this model:
+#   - Audio encoder + projector on a Llama-3.1-8B backbone: the encoder -> projector
+#     -> LLM boundary is clean and inspectable, and the LLM half is the most
+#     thoroughly tooled model in interpretability.
+#   - "Who Wins the Conflict?" (2606.18924) already demonstrated attribution
+#     patching + logit lens + layer localization ON THIS MODEL, so the mechanistic
+#     tooling is known to work rather than assumed.
+#   - Multi-accent jailbreaking (2504.01094) flags it alongside MiniCPM as
+#     "particularly high susceptibility" to synthetic accents.
+#
+# Ranked below Kimi-Audio because it offers no privileged semantic/acoustic
+# separation and its quantitative safety anchor is thinner.
+model_id: fixie-ai/ultravox-v0_4_1-llama-3_1-8b
+loader: hf_auto_multimodal
+trust_remote_code: true
+dtype: bfloat16
+device_map: auto
+attn_implementation: sdpa
+revision: null # pin to a commit sha before the confirmatory phase
