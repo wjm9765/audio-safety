@@ -241,3 +241,17 @@ A candidate failing the specificity row is terminated **before** dataset rebuild
   gave CONDITIONAL GO on starting from Jailbreak-AudioBench; round 11 set the
   model pool and the lead-versus-artifact rule. `design.md` §0 for exp2 is
   deliberately not yet written.
+- **2026-07-28 (later, rounds 13–17)** — Two corrections to this document's
+  premises, both from verification rather than argument. (a) **Reverb is not a
+  content-preserving operator**: Multi-AudioJail's own Table 5 reports English
+  Whisper-large-v3 WER of 0.162 / 0.377 / 0.476 for Teisco / Room / Railway
+  versus 0.093 for echo, and its authors state that larger WER degradation
+  corresponds to higher jailbreak success — so a briefly-held "reverb is the
+  cleanest operator" reading was withdrawn. (b) **The target moved** from
+  "content preserved" to **"specific harm is still represented, yet refusal
+  fails"**, making comprehension an eligibility filter rather than the research
+  question. The executable consequence — a paired-switcher population, a yield
+  pilot to size the main study, three-stage judging, and an analysis order forced
+  by n-dependence rather than by principle — is specified in
+  [`pilot_protocol.md`](pilot_protocol.md). §5's model plan and §7's
+  lead-versus-artifact rule are unchanged.

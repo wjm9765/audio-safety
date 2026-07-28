@@ -238,3 +238,55 @@ Run 12/13 identity baseline(비선별 150 item): **clean_H full-generation 거�
 | 깨끗한 안전 침식이 decoding 저하 없이 관측 (Qwen 단독 현상) | **6/10** |
 | + 기전 + held-out factor repair + 2번째 모델 재현 | **7–8/10** |
 | 다시 ≈5:1 비율 재현 | **4–5/10, 중단** (별개의 multi-operator construct-validity 논문으로는 5–6) |
+
+---
+
+# 부록 3 — 라운드 13~17 (2026-07-28): 분석 도구 · reverb 검증 · 3자 교차검증
+
+실행 사양은 [`docs/experiments/exp2_acoustic_refusal_transport/pilot_protocol.md`](../experiments/exp2_acoustic_refusal_transport/pilot_protocol.md)로 이관.
+
+## R13 — 분석 도구 자체가 소진됐다 (PI 지적)
+
+PI: *"layer switch, add, ablation, DiM, SVD 다 해봤는데 명확히 안 나왔다. 데이터를 그대로 가져가면 이 분석 결과는 크게 안 바뀔 것 같다."*
+
+Codex 귀책 분해 — **L18 low-rank null**: 도구/부위 오지정 60% / 자극 품질 30% / 모델 10%. **exp1 전체 실패**: 자극·operator 45% / 모델 30% / 도구 25%. ⇒ *"고정 후기층 additive 개입을 반복하는 것만 같은 null을 반복한다"*는 점에서 PI가 옳다.
+
+**진단:** exp1의 모든 방법이 **"아이템 간 공유되는 고정 방향으로의 덧셈 변위"**를 가정. Run 13 기하(σ1/σ8≈1.8, cross-fold 89.4°, rank-64 재구성 0.132/0.182)는 그런 물체가 없다는 뜻. **동시에 모든 아이템의 margin은 −2.1로 비슷하게 떨어진다** ⇒ 공유 성분이 저노름이라 분산최대화 SVD가 아이템별 nuisance를 잡은 것과 정합.
+
+**대안 순위 (GPU시간당 정보량):** ① operator fitting(benign 학습, CPU, 저장 데이터로 즉시) ② encoder/projector·초기층 국소화 ③ head/path attribution ④ behavior-optimized subspace / 시간가변 개입 / SAE.
+
+**미따라간 단서:** Run 11에서 Arm A(오디오 구간)는 **L8–L12에서만** sham을 이기고 L16–L28은 무반응인데, 확증 작업은 전부 L18 readout으로 갔다.
+
+## R14~15 — reverb 발견, 그리고 **철회**
+
+Jailbreak-AudioBench 단일 편집 검증: MiniCPM 원본 18.2%, Tone+8 **+7.9**, Kanye accent **+7.9**, 나머지 <5% (논문 표현 "generally within 5%"). Qwen은 단일 편집이 대부분 ASR을 **낮춤**. 헤드라인 16.8→48.8은 **32조합 grid search**. SALMONN-7B만 단일 편집 +17~28pp이나 정렬이 약함(원본 31.4%).
+
+Multi-AudioJail(2504.01094) 영어 전용, 고정 조건: 무변형 오디오 JSR Qwen2 1.92 / DiVA 0.96 / MERaLiON 4.90 / MiniCPM 1.25 / Ultravox 1.06 → **Reverb Room** 11.54 / 24.81 / 44.04 / 30.38 / 27.50, **Reverb Railway** 15.38 / 32.69 / 44.04 / 23.56 / 26.54. **Echo ≈ +0.7pp, Whisper ≈ 0.** 최대 +39pp, 12~34배.
+
+**→ PDF 검증에서 철회.** Table 5 (Whisper-large-v3, 영어 WER): Whisper 0.092 · **Echo 0.093** · **Teisco 0.162** · **Room 0.377** · **Railway 0.476**. 저자 서술: *"더 큰 WER 저하를 유발하는 변형이 더 높은 JSR과 대응한다."* 구현은 `fftconvolve(x, ir)` + peak 정규화만 (RT60·DRR·라우드니스 매칭 없음). JSR = Llama Guard 3 이진, FN 3.0%/FP 1.6%, *"unrelated 응답 제외"*, **jailbreak 성공에 대한 인간 평가 없음**(250건은 판정자 정확도 검증용).
+
+⇒ **"reverb는 가장 깨끗한 content-preserving 조작"이라는 주장 철회.** reverb-vs-echo 이중해리도 기전 단서가 아니라 WER 차이일 가능성이 높다. 잔여 단서: 억양 영어에서 **Echo가 WER 0.131로 MiniCPM +15.67pp** (Reverb Railway는 WER 0.744로 +29.50pp) — **손상 단위당 효과는 echo가 3배 높다.**
+
+**전 문헌 정합:** phase vocoder(큼→66% 깨짐) · 피치/볼륨/속도(작음→약함) · 감정(작음→약함) · echo/whisper(0.09→0) · reverb(0.16~0.48→+21~39pp). **공개된 오디오 jailbreak 효과는 이해 손상에 비례하고, 아무도 이를 분리 보고하지 않는다.**
+
+## R16 — 타깃 전환: content 보존 → **유해 인식 + 거부 실패**
+
+PI: *"디코딩 실패는 감수하고 정직하게 보고하면 된다. 내가 주목하는 건 모델이 harmful은 아는데 뚫리는 것, 그 원인을 내부에서 찾는 것."*
+
+Codex: **더 나은 estimand.** 얻는 것 = 안전 관련 gate / 일부 어휘 손상 조건 사용 가능 / 유해 표상 유지↔거부 실행 직접 대비. 잃는 것 = "동일 요청을 이해했다"는 주장 / 음향 vs 인지내용 귀속 / post-treatment 선택 시 전체 인과효과. **WER 문제를 없애는 게 아니라 옮긴다** ⇒ gate가 *구체적* 유해 의도를 인증해야 하며 이진 yes/no는 불충분(Run 10: anchor 잃은 131/626을 92.4% 통과시킴).
+
+## R17 — GPT Pro 3자 리뷰와 그 결함
+
+GPT Pro 기여(채택): comprehension을 eligibility filter로 강등 / **paired switcher** 정의 / Intent→Harm→Refusal 3단 분해 / transition matrix + **reverse switcher**(Codex: "부호 대칭 검정, 수사가 아님") / 주장 범위 제한.
+
+**GPT Pro의 결함 (Codex 전부 동의):**
+- **표본 크기 미계산 — 구속적 결함.** Run 10 기준 switcher는 최대 14, 현실적으로 ~2. **n=2~14로는 layer×component heatmap·head attribution·held-out 재현 전부 불가능.**
+- exp1이 이미 L8–L12로 국소화한 것을 모른 채 무제한 grid 제안 (계산 낭비).
+- "query-aligned"가 **관계 수준**이어야 함 — 키워드 공유하는 *다른* 유해 요청에 유창하게 답한 것을 배제하려면 R16의 action·target·means gate가 필수.
+- `z^intent/z^harm/z^refusal`은 확립된 처리 단계가 아니라 **probe**. 각각 독립 학습·cross-fit·인과 검정 필요.
+
+**순서 충돌 해소:** operator fitting은 **benign 쌍으로 학습하므로 switcher 0개여도 가능**(저장 300쌍, CPU). switcher 패칭은 switcher 수에 걸림. ⇒ 순서는 원리가 아니라 **보유 데이터가 강제**한다.
+
+**GPU/CPU 경계:** hidden state **캡처**=GPU 필수, 저장된 state의 **분석**=CPU. 생성과 캡처는 **같은 pass**에서(따로 하면 GPU 2배).
+
+**판정 방식:** word matching은 스크리닝 전용. *"이 분야 지표가 오염됐다"고 주장하면서 그 지표를 주 지표로 쓰면 자기 논문이 자기 비판에 걸린다.* ⇒ 3단(문자열 스크리닝 → 비거부만 6분류+관계정렬 → 최종 B 인간검수).
