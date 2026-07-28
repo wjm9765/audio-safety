@@ -16,7 +16,8 @@ DECODER_LAYER_PATHS = (
     "model.language_model.layers",
     "language_model.layers",
     "language_model.model.layers",
-    # MiniCPM-o-2.6 wraps its Qwen2 backbone as ``.llm`` (exp2, unverified).
+    # MiniCPM-o-2.6 wraps its Qwen2 backbone as ``.llm``. VERIFIED 2026-07-28
+    # against real weights: Qwen2ForCausalLM, 28 layers, hidden 3584.
     "llm.model.layers",
     "model.llm.model.layers",
     "llm.layers",
@@ -27,7 +28,8 @@ DECODER_LAYER_PATHS = (
 AUDIO_TOWER_PATHS = (
     "model.audio_tower",
     "audio_tower",
-    # MiniCPM-o-2.6 names its Whisper-derived audio module ``apm`` (exp2, unverified).
+    # MiniCPM-o-2.6 names its Whisper-derived audio module ``apm``.
+    # VERIFIED 2026-07-28: resolves to MiniCPMWhisperEncoder.
     "apm",
     "model.apm",
     "audio_encoder",
@@ -37,7 +39,7 @@ AUDIO_TOWER_PATHS = (
 MULTIMODAL_PROJECTOR_PATHS = (
     "model.multi_modal_projector",
     "multi_modal_projector",
-    # MiniCPM-o-2.6 audio projector (exp2, unverified).
+    # MiniCPM-o-2.6 audio projector. VERIFIED 2026-07-28: MultiModalProjector.
     "audio_projection_layer",
     "model.audio_projection_layer",
 )
