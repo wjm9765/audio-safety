@@ -1,15 +1,16 @@
-from audio_safety.config.loader import load_experiment_config
+from audio_safety.config.loader import load_exp3_config, load_experiment_config
 from audio_safety.config.schema import (
+    AsrConfig,
+    AudioRdoConfig,
     AudioRdoDatasetConfig,
     AudioRdoDecisionConfig,
-    AudioRdoConfig,
-    AsrConfig,
     BaselineConfig,
     BehaviorConfig,
     ConeConfig,
     DataSplitConfig,
     DecisionConfig,
     DriftConfig,
+    Exp3RunConfig,
     ExperimentConfig,
     HiddenSiteConfig,
     ModelConfig,
@@ -20,8 +21,8 @@ from audio_safety.config.schema import (
     RdoLossWeightsConfig,
     StatsConfig,
     TargetGenerationConfig,
-    TtsConfig,
     TranscriptControlConfig,
+    TtsConfig,
 )
 
 __all__ = [
@@ -35,6 +36,7 @@ __all__ = [
     "DataSplitConfig",
     "DecisionConfig",
     "DriftConfig",
+    "Exp3RunConfig",
     "ExperimentConfig",
     "HiddenSiteConfig",
     "ModelConfig",
@@ -48,4 +50,5 @@ __all__ = [
     "TtsConfig",
     "TranscriptControlConfig",
     "load_experiment_config",
+    "load_exp3_config",
 ]

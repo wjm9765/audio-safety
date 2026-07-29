@@ -1,0 +1,7 @@
+model_id: Qwen/Qwen2-Audio-7B-Instruct
+# Pin the exact Hugging Face repository commit used by the Exp2 environment so
+# a fresh A40 cache cannot silently move to newer weights or processor files.
+revision: 0a095220c30b7b31434169c3086508ef3ea5bf0a
+dtype: bfloat16
+device_map: auto
+attn_implementation: sdpa

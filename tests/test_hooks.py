@@ -5,8 +5,10 @@ import pytest
 import torch
 
 from audio_safety.models.hooks import (
+    AudioSpanCapture,
     ProjectedTransportIntervention,
     ResidualStreamIntervention,
+    SpanStateIntervention,
     get_decoder_layers,
 )
 
@@ -42,6 +44,48 @@ class _TinyLayerModel(torch.nn.Module):
 
     def forward(self, hidden):
         return self.layers[0](hidden)
+
+
+class _TwoLayerModel(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.layers = torch.nn.ModuleList([_IdentityLayer(), _IdentityLayer()])
+
+    def forward(self, hidden):
+        for layer in self.layers:
+            hidden = layer(hidden)
+        return hidden
+
+
+def test_audio_span_capture_keeps_complete_aligned_rows():
+    model = _TwoLayerModel()
+    hidden = torch.arange(30, dtype=torch.float32).reshape(1, 5, 6)
+    with AudioSpanCapture(model, layers=[0, 1], positions=[1, 3]) as capture:
+        model(hidden)
+    states = capture.states()
+    assert set(states) == {0, 1}
+    assert states[0].shape == (2, 6)
+    assert torch.equal(states[0], hidden[0, [1, 3]])
+    assert torch.equal(states[1], hidden[0, [1, 3]])
+
+
+def test_span_state_intervention_replaces_directly_and_only_once():
+    model = _TwoLayerModel()
+    hidden = torch.zeros(1, 5, 3)
+    replacement = torch.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+    intervention = SpanStateIntervention(
+        model,
+        layer_idx=0,
+        positions=[1, 3],
+        replacement=replacement,
+    )
+    with intervention:
+        prefill = model(hidden)
+        decode = model(torch.zeros(1, 1, 3))
+    assert torch.equal(prefill[0, [1, 3]], replacement)
+    assert torch.equal(prefill[0, [0, 2, 4]], torch.zeros(3, 3))
+    assert torch.equal(decode, torch.zeros(1, 1, 3))
+    assert intervention.applied_count == 1
 
 
 def test_residual_intervention_accepts_numpy_vector_and_backpropagates():
@@ -170,13 +214,16 @@ def test_all_positions_set_coordinate_rejects_per_row_target():
     hidden = torch.zeros(1, 3, 2)
     vector = np.array([1.0, 0.0], dtype=np.float32)
 
-    with pytest.raises(ValueError, match="scalar or match batch size"), ResidualStreamIntervention(
-        model,
-        layer_idx=0,
-        vector=vector,
-        mode="set_coordinate",
-        target_coordinate=np.array([1.0, 2.0], dtype=np.float32),
-        all_positions=True,
+    with (
+        pytest.raises(ValueError, match="scalar or match batch size"),
+        ResidualStreamIntervention(
+            model,
+            layer_idx=0,
+            vector=vector,
+            mode="set_coordinate",
+            target_coordinate=np.array([1.0, 2.0], dtype=np.float32),
+            all_positions=True,
+        ),
     ):
         model(hidden)
 
@@ -224,7 +271,10 @@ def test_patch_state_applies_exactly_once_across_prefill_and_decode():
     # out of range and must be skipped, so the donor is injected exactly once.
     model = _TinyLayerModel()
     intervention = ResidualStreamIntervention(
-        model, layer_idx=0, token_index=3, mode="patch_state",
+        model,
+        layer_idx=0,
+        token_index=3,
+        mode="patch_state",
         replacement_state=np.ones(2, dtype=np.float32),
     )
     with intervention:
@@ -239,7 +289,10 @@ def test_patch_state_rejects_negative_index():
     model = _TinyLayerModel()
     with pytest.raises(ValueError, match="non-negative absolute token_index"):
         ResidualStreamIntervention(
-            model, layer_idx=0, token_index=-1, mode="patch_state",
+            model,
+            layer_idx=0,
+            token_index=-1,
+            mode="patch_state",
             replacement_state=np.zeros(2),
         )
 
@@ -254,17 +307,27 @@ def test_patch_state_rejects_all_positions():
     model = _TinyLayerModel()
     with pytest.raises(ValueError, match="does not support all_positions"):
         ResidualStreamIntervention(
-            model, layer_idx=0, token_index=0, mode="patch_state",
-            replacement_state=np.zeros(2), all_positions=True,
+            model,
+            layer_idx=0,
+            token_index=0,
+            mode="patch_state",
+            replacement_state=np.zeros(2),
+            all_positions=True,
         )
 
 
 def test_patch_state_dim_mismatch_raises_at_forward():
     model = _TinyLayerModel()
-    with ResidualStreamIntervention(
-        model, layer_idx=0, token_index=0, mode="patch_state",
-        replacement_state=np.zeros(3),
-    ), pytest.raises(ValueError, match="!= hidden dim"):
+    with (
+        ResidualStreamIntervention(
+            model,
+            layer_idx=0,
+            token_index=0,
+            mode="patch_state",
+            replacement_state=np.zeros(3),
+        ),
+        pytest.raises(ValueError, match="!= hidden dim"),
+    ):
         model(torch.zeros(1, 2, 2))
 
 
@@ -275,9 +338,7 @@ _BASIS_2 = np.array([[1.0, 0, 0, 0], [0, 1.0, 0, 0]], dtype=np.float32)  # P_U k
 
 def test_projected_transport_swaps_only_subspace_at_support():
     model = _TinyLayerModel()
-    hidden = torch.tensor(
-        [[[10.0, 11, 12, 13], [1, 2, 3, 4], [5, 6, 7, 8]]], dtype=torch.float32
-    )
+    hidden = torch.tensor([[[10.0, 11, 12, 13], [1, 2, 3, 4], [5, 6, 7, 8]]], dtype=torch.float32)
     donor = np.array([[100.0, 200, 300, 400], [500, 600, 700, 800]], dtype=np.float32)
 
     with ProjectedTransportIntervention(
@@ -317,8 +378,8 @@ def test_projected_transport_is_one_shot_and_skips_decode_step():
         assert ctx.applied_count == 1
         decode = torch.tensor([[[1.0, 2, 3, 4]]], dtype=torch.float32)  # length-1 decode
         out2 = model(decode)
-        assert ctx.applied_count == 1                # not re-applied
-        assert torch.allclose(out2, decode)          # decode step untouched
+        assert ctx.applied_count == 1  # not re-applied
+        assert torch.allclose(out2, decode)  # decode step untouched
 
 
 def test_projected_transport_fails_fast_on_out_of_range_support():
@@ -326,9 +387,12 @@ def test_projected_transport_fails_fast_on_out_of_range_support():
     quietly return an unpatched (null-effect) forward."""
     model = _TinyLayerModel()
     donor = np.zeros((1, 4), dtype=np.float32)
-    with ProjectedTransportIntervention(
-        model, layer_idx=0, positions=[5], donor=donor, basis=_BASIS_2
-    ), pytest.raises(ValueError, match="exceed the prefill"):
+    with (
+        ProjectedTransportIntervention(
+            model, layer_idx=0, positions=[5], donor=donor, basis=_BASIS_2
+        ),
+        pytest.raises(ValueError, match="exceed the prefill"),
+    ):
         model(torch.zeros(1, 3, 4))
 
 
@@ -336,21 +400,28 @@ def test_projected_transport_rejects_non_orthonormal_basis_and_nonfinite():
     model = _TinyLayerModel()
     donor = np.zeros((2, 4), dtype=np.float32)
     bad_basis = np.array([[1.0, 0, 0, 0], [1.0, 0, 0, 0]], dtype=np.float32)  # not orthonormal
-    with ProjectedTransportIntervention(
-        model, layer_idx=0, positions=[1, 2], donor=donor, basis=bad_basis
-    ), pytest.raises(ValueError, match="orthonormal"):
+    with (
+        ProjectedTransportIntervention(
+            model, layer_idx=0, positions=[1, 2], donor=donor, basis=bad_basis
+        ),
+        pytest.raises(ValueError, match="orthonormal"),
+    ):
         model(torch.zeros(1, 3, 4))
 
     bad_donor = np.array([[np.inf, 0, 0, 0], [0, 0, 0, 0]], dtype=np.float32)
-    with ProjectedTransportIntervention(
-        model, layer_idx=0, positions=[1, 2], donor=bad_donor, basis=_BASIS_2
-    ), pytest.raises(ValueError, match="non-finite"):
+    with (
+        ProjectedTransportIntervention(
+            model, layer_idx=0, positions=[1, 2], donor=bad_donor, basis=_BASIS_2
+        ),
+        pytest.raises(ValueError, match="non-finite"),
+    ):
         model(torch.zeros(1, 3, 4))
 
 
 def test_projected_transport_constructor_guards():
     model = _TinyLayerModel()
     donor = np.zeros((2, 4), dtype=np.float32)
+
     def _make(positions):
         return ProjectedTransportIntervention(
             model, layer_idx=0, positions=positions, donor=donor, basis=_BASIS_2
@@ -373,15 +444,22 @@ def test_additive_intervention_leaves_applied_count_zero():
     model = _TinyLayerModel()
     hidden = torch.zeros(1, 3, 2)
     with ResidualStreamIntervention(
-        model, layer_idx=0, vector=np.array([1.0, 0.0], dtype=np.float32),
-        mode="add", scale=1.0, all_positions=True,
+        model,
+        layer_idx=0,
+        vector=np.array([1.0, 0.0], dtype=np.float32),
+        mode="add",
+        scale=1.0,
+        all_positions=True,
     ) as add_ctx:
         model(hidden)
     assert add_ctx.applied_count == 0
 
     with ProjectedTransportIntervention(
-        model, layer_idx=0, positions=[1],
-        donor=np.zeros((1, 2), dtype=np.float32), basis=np.array([[1.0, 0.0]], dtype=np.float32),
+        model,
+        layer_idx=0,
+        positions=[1],
+        donor=np.zeros((1, 2), dtype=np.float32),
+        basis=np.array([[1.0, 0.0]], dtype=np.float32),
     ) as tp_ctx:
         model(hidden)
     assert tp_ctx.applied_count == 1

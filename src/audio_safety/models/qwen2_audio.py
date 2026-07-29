@@ -42,12 +42,15 @@ def load_qwen2_audio(
     }
     if cache_dir is not None:
         model_kwargs["cache_dir"] = str(cache_dir)
+    if cfg.revision is not None:
+        model_kwargs["revision"] = cfg.revision
 
     model = Qwen2AudioForConditionalGeneration.from_pretrained(cfg.model_id, **model_kwargs)
     model.eval()
     processor = AutoProcessor.from_pretrained(
         cfg.model_id,
         cache_dir=str(cache_dir) if cache_dir is not None else None,
+        revision=cfg.revision,
     )
     return model, processor
 
@@ -335,9 +338,7 @@ def generate_audio_response(
     device = model_input_device(model)
     inputs = prepare_qwen2_audio_inputs(processor, conversation, device=device)
     prompt_len = inputs.input_ids.shape[1]
-    generate_ids = model.generate(
-        **inputs, max_new_tokens=max_new_tokens, do_sample=do_sample
-    )
+    generate_ids = model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=do_sample)
     generate_ids = generate_ids[:, prompt_len:]
     return processor.batch_decode(
         generate_ids,
@@ -414,9 +415,7 @@ def generate_audio_response_with_intervention(
         target_coordinate=target_coordinate,
         all_positions=all_positions,
     ):
-        generate_ids = model.generate(
-            **inputs, max_new_tokens=max_new_tokens, do_sample=do_sample
-        )
+        generate_ids = model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=do_sample)
     generate_ids = generate_ids[:, prompt_len:]
     return processor.batch_decode(
         generate_ids,
@@ -451,9 +450,10 @@ def capture_audio_state(
     token_index = resolve_audio_position_indices(processor, conversation)[position_name]
     device = model_input_device(model)
     inputs = prepare_qwen2_audio_inputs(processor, conversation, device=device)
-    with torch.no_grad(), ResidualStreamCapture(
-        model, token_index=token_index, layers=[layer_idx]
-    ) as cap:
+    with (
+        torch.no_grad(),
+        ResidualStreamCapture(model, token_index=token_index, layers=[layer_idx]) as cap,
+    ):
         model(**inputs)
     state = cap.states()[layer_idx].numpy().astype(np.float32)
     return state, int(token_index)
@@ -496,9 +496,7 @@ def generate_audio_response_with_state_patch(
         replacement_state=replacement_state,
     )
     with intervention:
-        generate_ids = model.generate(
-            **inputs, max_new_tokens=max_new_tokens, do_sample=do_sample
-        )
+        generate_ids = model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=do_sample)
     if require_single_application and intervention.applied_count != 1:
         raise RuntimeError(
             f"patch_state applied {intervention.applied_count} times, expected 1 "

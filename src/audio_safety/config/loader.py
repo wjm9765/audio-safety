@@ -19,7 +19,7 @@ from typing import Any
 
 import yaml
 
-from audio_safety.config.schema import ExperimentConfig
+from audio_safety.config.schema import Exp3RunConfig, ExperimentConfig
 from audio_safety.utils.env import load_project_dotenv
 
 # Top-level keys whose string value is treated as a path to another YAML file.
@@ -60,10 +60,10 @@ def _apply_override(raw: dict[str, Any], spec: str) -> None:
     node[parts[-1]] = yaml.safe_load(value)
 
 
-def load_experiment_config(
+def _load_raw_config(
     path: Path | str,
     overrides: list[str] | None = None,
-) -> ExperimentConfig:
+) -> dict[str, Any]:
     # Load .env before any run so OPENROUTER_API_KEY (and other secrets) resolve
     # from the project .env instead of requiring a manual shell export. No-op when
     # .env is absent (CPU tests / CI); never overrides an already-set variable.
@@ -79,4 +79,20 @@ def load_experiment_config(
     for spec in overrides or []:
         _apply_override(raw, spec)
 
-    return ExperimentConfig.model_validate(raw)
+    return raw
+
+
+def load_experiment_config(
+    path: Path | str,
+    overrides: list[str] | None = None,
+) -> ExperimentConfig:
+    return ExperimentConfig.model_validate(_load_raw_config(path, overrides))
+
+
+def load_exp3_config(
+    path: Path | str,
+    overrides: list[str] | None = None,
+) -> Exp3RunConfig:
+    """Load the narrow Exp3 schema without requiring unrelated Exp1 sections."""
+
+    return Exp3RunConfig.model_validate(_load_raw_config(path, overrides))

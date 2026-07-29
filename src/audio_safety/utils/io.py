@@ -7,8 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-
-from audio_safety.config.schema import ExperimentConfig
+from pydantic import BaseModel
 
 
 def save_json(obj: Any, path: Path) -> None:
@@ -47,11 +46,28 @@ def get_git_commit() -> str | None:
         return None
 
 
-def snapshot_config(cfg: ExperimentConfig, run_dir: Path) -> Path:
+def get_git_dirty() -> bool | None:
+    """Whether tracked or untracked worktree files differ from ``HEAD``."""
+
+    try:
+        out = subprocess.run(
+            ["git", "status", "--porcelain"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10,
+        )
+        return bool(out.stdout.strip())
+    except (subprocess.SubprocessError, FileNotFoundError):
+        return None
+
+
+def snapshot_config(cfg: BaseModel, run_dir: Path) -> Path:
     """Write the fully-resolved config + git commit so the run is reproducible
     even if configs/ change later (AGENTS.md '실험 문서 규약')."""
     snapshot = {
         "git_commit": get_git_commit(),
+        "git_dirty": get_git_dirty(),
         "config": cfg.model_dump(mode="json"),
     }
     path = run_dir / "config_snapshot.yaml"

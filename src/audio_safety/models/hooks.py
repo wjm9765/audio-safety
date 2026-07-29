@@ -487,6 +487,7 @@ class ResidualStreamIntervention:
         # forward pass sees a length-1 slice, so this index is out of range and the
         # patch is skipped: the donor state is injected exactly once, at prefill.
         token_index = self._token_index
+        assert token_index is not None  # guarded by __init__ for patch_state
         if token_index >= hidden.shape[1]:
             return output
         if hidden.shape[0] != 1:
@@ -527,6 +528,7 @@ class ResidualStreamIntervention:
             return _replace_hidden_output(output, edited)
 
         token_index = self._token_index
+        assert token_index is not None  # guarded by __init__ unless all_positions
         if token_index < 0:
             token_index = hidden.shape[1] + token_index
         if token_index < 0 or token_index >= hidden.shape[1]:
@@ -665,15 +667,17 @@ class ProjectedTransportIntervention:
             raise ValueError("donor/basis contain non-finite values")
         gram = basis @ basis.transpose(0, 1)
         if not torch.allclose(
-            gram, torch.eye(basis.shape[0], device=basis.device, dtype=basis.dtype),
-            atol=1e-4, rtol=1e-4,
+            gram,
+            torch.eye(basis.shape[0], device=basis.device, dtype=basis.dtype),
+            atol=1e-4,
+            rtol=1e-4,
         ):
             raise ValueError("basis rows must be orthonormal (P_U assumes an orthonormal basis)")
 
         current = hidden[0].index_select(0, idx).to(torch.float32)  # (m, d)
-        delta = donor - current                                     # (m, d)
-        proj = (delta @ basis.transpose(0, 1)) @ basis              # (m, d), row-space of basis
-        replacement = current + self._scale * proj                  # float32, one cast below
+        delta = donor - current  # (m, d)
+        proj = (delta @ basis.transpose(0, 1)) @ basis  # (m, d), row-space of basis
+        replacement = current + self._scale * proj  # float32, one cast below
         edited = hidden.clone()
         edited[0, idx, :] = replacement.to(hidden.dtype)
         self._applied_count += 1
@@ -691,6 +695,139 @@ class ProjectedTransportIntervention:
     @property
     def applied_count(self) -> int:
         """Forward passes that applied the transport. Must be 1 after a full generation."""
+        return self._applied_count
+
+
+class AudioSpanCapture:
+    """Capture complete decoder residual states on aligned audio-token positions.
+
+    This is deliberately separate from :class:`AudioPathCapture`, which stores
+    pooled summaries. Full spans are kept only long enough to construct a causal
+    interchange donor for one item, avoiding a large persistent activation file.
+    Use one direct prefill forward inside the context.
+    """
+
+    def __init__(
+        self,
+        model: Any,
+        *,
+        layers: Iterable[int],
+        positions: Iterable[int],
+    ):
+        positions = sorted({int(position) for position in positions})
+        if not positions or positions[0] < 0:
+            raise ValueError("positions must contain non-negative absolute indices")
+        self._layers = _select_layers(get_decoder_layers(model), layers)
+        if not self._layers:
+            raise ValueError("layers must be non-empty")
+        self._positions = positions
+        self._handles: list[Any] = []
+        self._states: dict[int, Any] = {}
+
+    def _hook(self, layer_idx: int):
+        def hook(module: Any, inputs: Any, output: Any) -> None:
+            import torch
+
+            if layer_idx in self._states:
+                raise RuntimeError("AudioSpanCapture hook fired more than once")
+            hidden = output[0] if isinstance(output, tuple) else output
+            if hidden.ndim != 3 or hidden.shape[0] != 1:
+                raise ValueError("AudioSpanCapture requires hidden shape (1, tokens, dim)")
+            if self._positions[-1] >= hidden.shape[1]:
+                raise ValueError(
+                    f"audio position {self._positions[-1]} exceeds length {hidden.shape[1]}"
+                )
+            idx = torch.as_tensor(self._positions, dtype=torch.long, device=hidden.device)
+            self._states[layer_idx] = hidden[0].index_select(0, idx).detach().float().cpu()
+
+        return hook
+
+    def __enter__(self) -> "AudioSpanCapture":
+        self._states = {}
+        self._handles = [
+            layer.register_forward_hook(self._hook(layer_idx)) for layer_idx, layer in self._layers
+        ]
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        for handle in self._handles:
+            handle.remove()
+        self._handles = []
+
+    def states(self) -> dict[int, Any]:
+        if len(self._states) != len(self._layers):
+            raise RuntimeError(
+                f"captured {len(self._states)}/{len(self._layers)} requested audio spans"
+            )
+        return dict(self._states)
+
+
+class SpanStateIntervention:
+    """Directly replace a full aligned residual span on one decoder layer.
+
+    Unlike ``ProjectedTransportIntervention(..., basis=eye(d_model))``, this does
+    no quadratic identity projection. It performs the exact full-state operation
+    ``h[positions] = replacement`` once on prefill and exposes ``applied_count``
+    so drivers can fail closed on a silent no-op.
+    """
+
+    def __init__(
+        self,
+        model: Any,
+        *,
+        layer_idx: int,
+        positions: Iterable[int],
+        replacement: Any,
+    ):
+        positions = [int(position) for position in positions]
+        if not positions or positions != sorted(positions):
+            raise ValueError("positions must be non-empty and sorted")
+        if len(set(positions)) != len(positions) or positions[0] < 0:
+            raise ValueError("positions must be unique non-negative absolute indices")
+        self._layer = get_decoder_layers(model)[layer_idx]
+        self._positions = positions
+        self._max_position = positions[-1]
+        self._replacement = replacement
+        self._applied_count = 0
+        self._handle: Any | None = None
+
+    def _hook(self, module: Any, inputs: Any, output: Any) -> Any:
+        import torch
+
+        if self._applied_count:
+            return output
+        hidden = output[0] if isinstance(output, tuple) else output
+        if hidden.ndim != 3 or hidden.shape[0] != 1:
+            raise ValueError("SpanStateIntervention requires hidden shape (1, tokens, dim)")
+        if self._max_position >= hidden.shape[1]:
+            raise ValueError(
+                f"intervention position {self._max_position} exceeds length {hidden.shape[1]}"
+            )
+        replacement = torch.as_tensor(self._replacement, device=hidden.device, dtype=hidden.dtype)
+        expected = (len(self._positions), hidden.shape[-1])
+        if tuple(replacement.shape) != expected:
+            raise ValueError(
+                f"replacement must have shape {expected}, got {tuple(replacement.shape)}"
+            )
+        if not torch.isfinite(replacement).all():
+            raise ValueError("replacement contains non-finite values")
+        idx = torch.as_tensor(self._positions, dtype=torch.long, device=hidden.device)
+        edited = hidden.clone()
+        edited[0, idx, :] = replacement
+        self._applied_count += 1
+        return _replace_hidden_output(output, edited)
+
+    def __enter__(self) -> "SpanStateIntervention":
+        self._handle = self._layer.register_forward_hook(self._hook)
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        if self._handle is not None:
+            self._handle.remove()
+        self._handle = None
+
+    @property
+    def applied_count(self) -> int:
         return self._applied_count
 
 
