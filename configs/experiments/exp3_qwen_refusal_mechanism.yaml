@@ -116,7 +116,7 @@ exp3:
     enabled: true
     contrast: phase
     doses: [0.0, 0.25, 0.5, 0.75, 1.0]
-    components: [all, temporal_fast, temporal_slow, time_shift, wrong_item]
+    components: [all, temporal_fast, temporal_slow, time_shift, wrong_item, pad_floor]
     modulation_cutoff_hz: 8.0
     feature_frame_rate_hz: 100.0
     timeshift_frames: 25

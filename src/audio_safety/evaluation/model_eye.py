@@ -6,7 +6,9 @@ from typing import Literal
 
 import numpy as np
 
-ModelEyeComponent = Literal["all", "temporal_fast", "temporal_slow", "time_shift", "wrong_item"]
+ModelEyeComponent = Literal[
+    "all", "temporal_fast", "temporal_slow", "time_shift", "wrong_item", "pad_floor"
+]
 PatchControl = Literal["real", "identity", "wrong_item", "random_direction", "position_sham"]
 
 
@@ -101,7 +103,16 @@ def model_eye_component(
     valid_length: int | None = None,
     wrong_item_valid_length: int | None = None,
 ) -> np.ndarray:
-    """Select a component over valid frames, excluding fixed Whisper padding."""
+    """Select a component of ``delta``; temporal ops touch only valid frames.
+
+    ``all`` is the exact unmodified ``delta`` so that dose 0 and dose 1 reproduce
+    the two physical arms bit-for-bit.  Whisper's log-Mel floor is
+    ``max(log_spec, log_spec.max() - 8.0)``, a *global* clamp, so any edit that
+    moves the peak level also shifts the zero-padded tail by that same amount;
+    ``delta`` is therefore non-zero outside the valid frames.  ``pad_floor``
+    isolates exactly that padded-tail offset, which keeps the decomposition
+    complete: ``temporal_slow + temporal_fast + pad_floor == all``.
+    """
 
     delta = np.asarray(delta, dtype=np.float32)
     if valid_length is None:
@@ -110,8 +121,12 @@ def model_eye_component(
         raise ValueError("valid_length must cover at least two frames within delta")
     core = delta[..., :valid_length]
     if component == "all":
-        selected = core.copy()
-    elif component in {"temporal_slow", "temporal_fast"}:
+        return delta.copy()
+    if component == "pad_floor":
+        output = np.zeros_like(delta)
+        output[..., valid_length:] = delta[..., valid_length:]
+        return output
+    if component in {"temporal_slow", "temporal_fast"}:
         slow, fast = temporal_modulation_split(
             core, frame_rate_hz=frame_rate_hz, cutoff_hz=cutoff_hz
         )

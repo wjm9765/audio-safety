@@ -416,3 +416,29 @@ torch/transformers/CUDA 버전을 남긴다. 대용량 activation은 git에 올�
 ## 11. 변경 이력
 
 - 2026-07-29: 초기 Exp3 exploratory 규칙 작성. 아직 non-smoke A40 결과를 보지 않음.
+- 2026-07-29: **M1 padding 가정 정정 (smoke gate에서 발견, non-smoke 결과 이전).**
+  §5 Stage 1은 "고정 3000-frame padding의 delta는 0인지 검사한다"고 적었으나, 실측 결과
+  이 전제가 **거짓**이다. Whisper feature extractor의 log-Mel floor는
+  `log_spec = max(log_spec, log_spec.max() - 8.0)`으로 **전역(global) max에 걸린 clamp**라서,
+  peak level을 바꾸는 음향 편집은 zero-padding 구간의 floor까지 같은 양만큼 밀어낸다.
+  pv_locked↔pv_standard 3개 item에서 padding delta가 전역 max 차이와 **정확히 일치**했다
+  (예: item 0496에서 padding delta = 0.016398, Δglobal-max = 0.016398). padding delta의
+  Frobenius norm은 전체 ΔF의 23–29%로 무시할 수 없다.
+
+  영향과 조치:
+
+  - `model_eye_component`의 `all`은 이제 padding을 zero로 만들지 않고 **정확한 ΔF 전체**를
+    돌려준다. 이전 구현은 α=1에서 physical target의 padding을 복원하지 못했으므로 §5의
+    "α=1이 물리 target과 일치" endpoint gate를 원리적으로 통과할 수 없었다. 실측 α=1 재구성
+    오차는 float32 1 ulp(5.96e-08)이며 bf16 audio tower cast에서 소멸한다.
+  - 분해 완전성을 유지하기 위해 `pad_floor` component를 추가했다. 이제
+    `temporal_slow + temporal_fast + pad_floor == all`이 float precision 안에서 성립하고,
+    temporal split/shift는 여전히 valid frame에서만 수행한다.
+  - padding delta는 hard failure가 아니라 record되는 진단량이다
+    (`padding_delta_fro`, `padding_delta_max_abs`, `padding_delta_frac_of_total_fro`).
+
+  판정 임계값, endpoint 정의, primary estimand는 바뀌지 않았다. 이 정정은 §6 표의 "M1 α=0/1
+  physical endpoint 불일치 → input intervention 경로 무효" 규칙을 **더 엄격하게** 실행
+  가능하게 만든 것이지 완화한 것이 아니다. 다만 `pad_floor`가 큰 효과를 내면 해당 음향 요인의
+  일부는 "말소리 구간의 변화"가 아니라 "전역 peak level 변화가 밀어낸 feature floor"로
+  귀속되어야 하므로, 해석 시 이 component를 반드시 함께 보고한다.

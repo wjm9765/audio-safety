@@ -1168,11 +1168,24 @@ def run_input_dose(
         valid_length = int(source["feature_valid_length"])
         if int(target["feature_valid_length"]) != valid_length:
             raise ValueError("paired physical arms have different valid feature lengths")
+        # Whisper's log-Mel floor is a global clamp (max(log_spec, max - 8)), so an
+        # acoustic edit that moves the peak level shifts the zero-padded tail too.
+        # The padded delta is therefore recorded and carried by `all`/`pad_floor`
+        # rather than assumed away; zeroing it would break the alpha=1 endpoint.
         padding_delta = delta[..., valid_length:]
-        if padding_delta.size and not np.allclose(padding_delta, 0.0, rtol=0.0, atol=1e-7):
-            raise ValueError(
-                "paired input-feature padding differs; M1 endpoints are not isolatable"
-            )
+        padding_fro = (
+            float(np.linalg.norm(padding_delta.reshape(-1))) if padding_delta.size else 0.0
+        )
+        delta_fro_total = float(np.linalg.norm(delta.reshape(-1)))
+        padding_stats = {
+            "padding_delta_fro": padding_fro,
+            "padding_delta_max_abs": (
+                float(np.abs(padding_delta).max()) if padding_delta.size else 0.0
+            ),
+            "padding_delta_frac_of_total_fro": (
+                padding_fro / delta_fro_total if delta_fro_total > 0.0 else 0.0
+            ),
+        }
         wrong_delta = None
         wrong_valid_length = None
         wrong_pair = wrong_lookup.get(str(pair["pair_id"]))
@@ -1259,6 +1272,7 @@ def run_input_dose(
                     "wrong_item_valid_feature_frames": wrong_valid_length,
                     "delta_fro": float(np.linalg.norm(delta.reshape(-1))),
                     "component_fro": float(np.linalg.norm(component.reshape(-1))),
+                    **padding_stats,
                     "response": generated["response"] if gate.generate_text else None,
                     "explicit_refusal": (
                         generated["explicit_refusal"] if gate.generate_text else None

@@ -48,40 +48,51 @@ def test_feature_wrong_item_is_resampled_and_norm_matched():
     assert np.linalg.norm(component) == pytest.approx(np.linalg.norm(delta), rel=1e-6)
 
 
-def test_feature_components_never_move_whisper_padding():
+def _component(delta, name, wrong=None, valid_length=7):
+    return model_eye_component(
+        delta,
+        name,
+        frame_rate_hz=100.0,
+        cutoff_hz=8.0,
+        timeshift_frames=2,
+        wrong_item_delta=wrong,
+        valid_length=valid_length,
+        wrong_item_valid_length=None if wrong is None else 5,
+    )
+
+
+def _padded_delta():
+    """A delta with a non-zero padded tail, as Whisper's global floor clamp gives."""
+
     delta = np.zeros((1, 3, 12), dtype=np.float32)
     delta[..., :7] = np.arange(21, dtype=np.float32).reshape(1, 3, 7) + 1
+    delta[..., 7:] = -0.25  # global log-Mel floor shift outside the valid frames
+    return delta
+
+
+def test_temporal_and_structural_components_never_move_whisper_padding():
+    delta = _padded_delta()
     wrong = np.zeros((1, 3, 12), dtype=np.float32)
     wrong[..., :5] = 2.0
-    for name in ("all", "temporal_fast", "temporal_slow", "time_shift", "wrong_item"):
-        component = model_eye_component(
-            delta,
-            name,
-            frame_rate_hz=100.0,
-            cutoff_hz=8.0,
-            timeshift_frames=2,
-            wrong_item_delta=wrong,
-            valid_length=7,
-            wrong_item_valid_length=5,
-        )
-        np.testing.assert_array_equal(component[..., 7:], 0.0)
-    slow = model_eye_component(
-        delta,
-        "temporal_slow",
-        frame_rate_hz=100.0,
-        cutoff_hz=8.0,
-        timeshift_frames=2,
-        valid_length=7,
-    )
-    fast = model_eye_component(
-        delta,
-        "temporal_fast",
-        frame_rate_hz=100.0,
-        cutoff_hz=8.0,
-        timeshift_frames=2,
-        valid_length=7,
-    )
-    np.testing.assert_allclose(slow + fast, delta, rtol=2e-6, atol=2e-7)
+    for name in ("temporal_fast", "temporal_slow", "time_shift", "wrong_item"):
+        np.testing.assert_array_equal(_component(delta, name, wrong)[..., 7:], 0.0)
+
+
+def test_all_component_is_the_exact_delta_so_dose_endpoints_reproduce_arms():
+    delta = _padded_delta()
+    # Zeroing the padded tail here would make source + 1.0 * component differ from
+    # the physical target arm, which is exactly what the M1 endpoint gate checks.
+    np.testing.assert_array_equal(_component(delta, "all"), delta)
+
+
+def test_pad_floor_completes_the_decomposition():
+    delta = _padded_delta()
+    slow = _component(delta, "temporal_slow")
+    fast = _component(delta, "temporal_fast")
+    pad = _component(delta, "pad_floor")
+    np.testing.assert_array_equal(pad[..., :7], 0.0)
+    np.testing.assert_array_equal(pad[..., 7:], delta[..., 7:])
+    np.testing.assert_allclose(slow + fast + pad, delta, rtol=2e-6, atol=2e-7)
 
 
 @pytest.mark.parametrize("condition", ["wrong_item", "random_direction", "position_sham"])
