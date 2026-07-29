@@ -500,12 +500,13 @@ class ResidualStreamIntervention:
             raise ValueError(
                 f"replacement_state dim {donor.shape[0]} != hidden dim {hidden.shape[-1]}"
             )
-        current = hidden[:, token_index, :]
-        token_mask = torch.nn.functional.one_hot(
-            torch.tensor(token_index, device=hidden.device),
-            num_classes=hidden.shape[1],
-        ).to(dtype=hidden.dtype)
-        edited = hidden + token_mask.view(1, -1, 1) * (donor.unsqueeze(0) - current).unsqueeze(1)
+        # Assign the donor verbatim instead of adding (donor - current): in bf16 the
+        # additive form rounds twice, so h[p] lands near the donor rather than on it
+        # and the final-layer control cannot reproduce the donor readout exactly.
+        # Identity stayed exact under the additive form only because its delta was
+        # identically zero, which hid the error. Mirrors SpanStateIntervention.
+        edited = hidden.clone()
+        edited[:, token_index, :] = donor.unsqueeze(0)
         self._applied_count += 1
         return _replace_hidden_output(output, edited)
 

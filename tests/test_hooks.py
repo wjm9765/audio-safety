@@ -253,6 +253,32 @@ def test_patch_state_replaces_position_verbatim_without_normalizing():
     assert torch.allclose(edited[0, 3], torch.tensor([0.0, 0.0]))
 
 
+def test_patch_state_is_bit_exact_in_bfloat16():
+    """Regression: the donor must be assigned, not added as (donor - current).
+
+    In bfloat16 the additive form rounds twice, so the patched position lands
+    near the donor instead of on it.  Identity patching hides this because its
+    delta is identically zero, and float32 ``allclose`` hides it as well, so the
+    final-layer readout control was the only place it surfaced.
+    """
+
+    model = _TinyLayerModel()
+    generator = torch.Generator().manual_seed(0)
+    hidden = torch.randn(1, 8, 16, generator=generator).to(torch.bfloat16)
+    donor = torch.randn(16, generator=generator).to(torch.bfloat16)
+    # Guard the regression itself: these values do break the additive form.
+    assert not torch.equal(hidden[0, 3] + (donor - hidden[0, 3]), donor)
+
+    with ResidualStreamIntervention(
+        model, layer_idx=0, token_index=3, mode="patch_state", replacement_state=donor
+    ):
+        edited = model(hidden)
+
+    assert torch.equal(edited[0, 3], donor)
+    assert torch.equal(edited[0, :3], hidden[0, :3])
+    assert torch.equal(edited[0, 4:], hidden[0, 4:])
+
+
 def test_patch_state_identity_is_invariant():
     model = _TinyLayerModel()
     hidden = torch.tensor([[[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]])
