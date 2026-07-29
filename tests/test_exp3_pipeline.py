@@ -14,6 +14,7 @@ from audio_safety.pipelines.exp3_qwen_mechanism import (
     _mechanism_cohort,
     _net_refusal_difference,
     _stratified_limit,
+    _transport_alignment,
     behavior_contract_sha,
     build_pair_manifest,
     collect_behavior,
@@ -271,3 +272,41 @@ def test_mechanism_cohort_caps_discordant_pairs_per_role_and_direction(tmp_path)
     assert all("role" in row and "source_path" in row for row in cohort)
     # The frozen cohort is stable across calls.
     assert _mechanism_cohort(cfg, run_dir, contrast_name="phase") == cohort
+
+
+def test_transport_alignment_accepts_undirected_input_dose_rows():
+    """Regression: M1 dose records carry no "direction" field.
+
+    analyze_all feeds input_dose rows straight into _transport_alignment, which
+    previously indexed row["direction"] unconditionally and raised KeyError, so
+    the analyze stage could not run on any run that completed M1.
+    """
+
+    cfg = load_exp3_config("configs/experiments/exp3_qwen_refusal_mechanism.yaml")
+    rows = [
+        {
+            "pair_id": "phase:i0",
+            "component": "all",
+            "dose": 1.0,
+            "role": "harmful",
+            "baseline_r_tab_margin": -1.0,
+            "donor_r_tab_margin": 1.0,
+            "r_tab_margin": 0.5,
+        },
+        {
+            "pair_id": "phase:i1",
+            "component": "all",
+            "dose": 1.0,
+            "role": "harmful",
+            "baseline_r_tab_margin": 2.0,
+            "donor_r_tab_margin": 0.0,
+            "r_tab_margin": 1.0,
+        },
+    ]
+    out = _transport_alignment(cfg, rows, group_fields=["component", "dose", "role"])
+    key = "component=all|dose=1.0|role=harmful"
+    assert key in out
+    # i0: observed +1.5, desired +2.0 -> 3.0 ; i1: observed -1.0, desired -2.0 -> 2.0
+    assert out[key]["signed_alignment"]["mean"] == pytest.approx(2.5)
+    # Transport fractions are 0.75 and 0.5.
+    assert out[key]["transport_fraction"]["mean"] == pytest.approx(0.625)

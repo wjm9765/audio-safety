@@ -2491,11 +2491,15 @@ def _transport_alignment(
 ) -> dict[str, Any]:
     """Positive means the patch moved t_AB margin toward the paired donor arm."""
 
+    # M1 dose records are not directional: they always run source -> target and
+    # carry an explicit donor margin, so the opposite-direction fallback below is
+    # only defined for the patch stages that do record a direction.
     host_margin: dict[tuple[str, str], float] = {}
     for row in rows:
-        host_margin[(str(row["pair_id"]), str(row["direction"]))] = float(
-            row["baseline_r_tab_margin"]
-        )
+        row_direction = row.get("direction")
+        if row_direction is None:
+            continue
+        host_margin[(str(row["pair_id"]), str(row_direction))] = float(row["baseline_r_tab_margin"])
     opposite = {
         "source_to_target": "target_to_source",
         "target_to_source": "source_to_target",
@@ -2503,14 +2507,16 @@ def _transport_alignment(
     grouped: dict[tuple[Any, ...], list[float]] = defaultdict(list)
     fractions: dict[tuple[Any, ...], list[float]] = defaultdict(list)
     for row in rows:
-        direction = str(row["direction"])
+        direction = row.get("direction")
         host = float(row["baseline_r_tab_margin"])
         donor_value = row.get("donor_r_tab_margin")
-        donor = (
-            float(donor_value)
-            if donor_value is not None
-            else host_margin.get((str(row["pair_id"]), opposite[direction]))
-        )
+        donor: float | None
+        if donor_value is not None:
+            donor = float(donor_value)
+        elif direction is not None:
+            donor = host_margin.get((str(row["pair_id"]), opposite[str(direction)]))
+        else:
+            donor = None
         if donor is None:
             continue
         desired = donor - host
