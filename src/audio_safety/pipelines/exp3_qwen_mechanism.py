@@ -1689,7 +1689,10 @@ def _mechanism_cohort(
     controls: list[dict[str, Any]] = []
     for row in selected:
         if row["selection_role"] == "discordant":
-            grouped_discordant[(str(row["role"]), str(row["transition"]))].append(row)
+            # select_transition_cohort nests the stratum values it was given under
+            # "stratum"; the role is not promoted to the top level of the row.
+            stratum_role = str(dict(row["stratum"])["role"])
+            grouped_discordant[(stratum_role, str(row["transition"]))].append(row)
         else:
             controls.append(row)
     capped: list[dict[str, Any]] = []

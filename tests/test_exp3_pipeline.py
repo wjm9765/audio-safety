@@ -1,5 +1,6 @@
 import hashlib
 import json
+from collections import Counter
 from types import SimpleNamespace
 
 import pytest
@@ -10,6 +11,7 @@ from audio_safety.evaluation.refusal_instability import EXPLICIT_REFUSAL
 from audio_safety.pipelines.exp3_qwen_mechanism import (
     _behavior_transport,
     _first_token_ids,
+    _mechanism_cohort,
     _net_refusal_difference,
     _stratified_limit,
     behavior_contract_sha,
@@ -197,3 +199,75 @@ def test_cpu_preflight_freezes_inputs_without_trusting_legacy_generations(tmp_pa
     (paths.data_dir / "audio/pv_standard/i0.wav").write_bytes(b"changed")
     with pytest.raises(RuntimeError, match="pair manifest changed"):
         build_pair_manifest(cfg, paths, run_dir)
+
+
+def _cohort_pair(item, role, source_arm="pv_locked", target_arm="pv_standard"):
+    return {
+        "schema_version": "exp3.v1",
+        "pair_id": f"phase:{item}",
+        "item_id": item,
+        "role": role,
+        "category_name": "test",
+        "reference_text": f"request {item}",
+        "harmful_anchors": None,
+        "contrast": "phase",
+        "purpose": "mechanism",
+        "source_arm": source_arm,
+        "target_arm": target_arm,
+        "source_path": f"/tmp/{item}-{source_arm}.wav",
+        "target_path": f"/tmp/{item}-{target_arm}.wav",
+        "source_sha256": f"sha-{item}-{source_arm}",
+        "target_sha256": f"sha-{item}-{target_arm}",
+    }
+
+
+def _cohort_behavior(item, arm, refusing):
+    status = "explicit_refusal" if refusing else "explicit_refusal_absent"
+    return {
+        "item_id": item,
+        "arm": arm,
+        "refusal_status": status,
+        "marker_status": status,
+        "explicit_refusal": refusing,
+        "behavior_contract_sha256": "contract",
+        "runtime_behavior_contract_sha256": "runtime",
+    }
+
+
+def test_mechanism_cohort_caps_discordant_pairs_per_role_and_direction(tmp_path):
+    """Regression: the selector nests role under "stratum", not at the row top level."""
+
+    cfg = load_exp3_config(
+        "configs/experiments/exp3_qwen_refusal_mechanism.yaml",
+        overrides=[
+            "exp3.span_patch.cohort.max_discordant_each_direction=2",
+            "exp3.span_patch.cohort.max_stable_refusal=0",
+            "exp3.span_patch.cohort.max_stable_nonrefusal=0",
+        ],
+    )
+    run_dir = tmp_path / "exp3_cohort"
+    pairs, behavior = [], []
+    # Three R->NR discordant pairs in each role, plus one NR->R harmful pair.
+    for role in ("harmful", "benign"):
+        for index in range(3):
+            item = f"{role}{index}"
+            pairs.append(_cohort_pair(item, role))
+            behavior.append(_cohort_behavior(item, "pv_locked", True))
+            behavior.append(_cohort_behavior(item, "pv_standard", False))
+    pairs.append(_cohort_pair("harmful_up", "harmful"))
+    behavior.append(_cohort_behavior("harmful_up", "pv_locked", False))
+    behavior.append(_cohort_behavior("harmful_up", "pv_standard", True))
+    _write_jsonl(run_dir / cfg.exp3.artifacts.pairs_file, pairs)
+    _write_jsonl(run_dir / cfg.exp3.artifacts.behavior_file, behavior)
+
+    cohort = _mechanism_cohort(cfg, run_dir, contrast_name="phase")
+
+    assert all(row["selection_role"] == "discordant" for row in cohort)
+    grouped = Counter((row["role"], row["transition"]) for row in cohort)
+    # Each (role, transition) group is capped independently at 2.
+    assert grouped[("harmful", "refusal_to_nonrefusal")] == 2
+    assert grouped[("benign", "refusal_to_nonrefusal")] == 2
+    assert grouped[("harmful", "nonrefusal_to_refusal")] == 1
+    assert all("role" in row and "source_path" in row for row in cohort)
+    # The frozen cohort is stable across calls.
+    assert _mechanism_cohort(cfg, run_dir, contrast_name="phase") == cohort
