@@ -311,3 +311,82 @@ temporal/wrong-item comparison as the **null** it is.
 
 Do not bury the benign result, the L18 behavioural null, or the `R_tAB`/marker
 disagreement — reviewers will find them, and hiding them is more damaging.
+
+---
+
+## exp3-003 — t_AB mediation test, and two corrections to my own interpretation (2026-07-30) — GPU
+
+Run `tab_mediation/records.jsonl` inside `exp3_20260729_1445_qwen_phase_mechanism`.
+1808 cells, 113-pair frozen cohort, both directions, 8 conditions, ~60 min.
+Endpoint is the **full generated refusal marker**, not `R_tAB`, because exp3-002
+showed the two diverge in sign on 38.4% of discordant pairs.
+
+**Why blocking rather than rescue.** The reviewer proposed a rescue design
+(L10 inject → L12 span reset → later `t_AB` donor injection restores it). That is
+**under-identified**: Stage 5 showed donor `t_AB` injection at L18 *alone* already
+moves the output, so "it came back" cannot separate a hand-off from re-running the
+Stage 5 effect. Confirmed empirically — `reset_rescue` +0.349 vs `rescue_only`
++0.322, paired difference **+0.027 ±0.038, includes zero**. Blocking was made
+primary instead: inject the donor span at L10, then clamp `t_AB` back to the
+**host** state at L14 or L18.
+
+### Results (pair-clustered, n=73 discordant pairs)
+
+| condition | donorward | r_k vs inject_only |
+|---|---|---:|
+| `identity` | +0.000 | — |
+| `clamp_l18_only` | +0.000 | — |
+| `inject_only` | +0.781 ±0.066 | 100% |
+| `inject_clamp_l14` | +0.705 ±0.071 | **90.4%** |
+| `inject_clamp_l18` | +0.589 ±0.077 | **75.4%** |
+| `inject_reset` (L12 span → host) | +0.144 ±0.052 | **18.4%** |
+
+Paired within-pair differences all exclude zero: vs `clamp_l14` +0.075 ±0.059,
+vs `clamp_l18` +0.192 ±0.087, vs `inject_reset` +0.637 ±0.090.
+Integrity: 452/452 no-op cells exact, margin error `0.0e+00`, `applied_counts`
+(1,), (1,1), (1,1,1) all firing exactly once.
+
+### What this licenses — and two corrections to what I first said
+
+**Correction 1.** I first wrote that the effect *"bypasses the readout position"*.
+Wrong. A one-time clamp is transient: at the next block `t_AB` can become
+donor-conditioned again by attending to earlier positions. Survival after a
+single-layer clamp is not evidence of bypass.
+
+**Correction 2.** My repair — *"the audio positions are read repeatedly across
+layers"* — also overreaches, on three counts raised in review:
+- the L10-patched positions do not remain *donor* states; they become **hybrid
+  descendants** of the patch. Say the perturbation persists, not the donor state.
+- re-entry need not come from audio positions at all: donor information may
+  already have propagated into intervening text/control tokens.
+- the 83% (span reset) and 24% (single-token clamp) figures differ in timing,
+  duration and dimensionality and are **not comparable as "percent mediated"**.
+
+**Defensible statement:**
+
+> An L10 donor audio-span patch remained behaviourally effective after a one-time
+> host reset of the answer-boundary residual at L14 or L18, but was largely
+> attenuated by resetting the audio-span residual at L12 — ruling out either
+> tested intermediate answer state as an **exclusive** causal bottleneck, without
+> establishing repeated audio-to-answer readout.
+
+### Relation to GACL — a qualification, not a contradiction
+
+I previously framed this as contradicting GACL's answer-position localization
+(ρ=0.93). That overreads a partial result: the L18 clamp produced **significant**
+attenuation, so this is not a null answer-position finding, and a single-layer
+clamp cannot test persistent localization. Information can be strongly readable
+and causal at the answer position while also being distributed elsewhere and
+regenerated there.
+
+### Trap recorded for the obvious follow-up
+
+Clamping `t_AB` at **all** layers ≥ k looks like the fix, but if the final
+answer-position residual is what gets unembedded, clamping through the last block
+**forces the first-token logits to the host logits** — near-total blocking would
+then be algebraic, not mechanistic, and with a full-generation endpoint one forced
+token can redirect the whole rollout. A path-specific edge patch (replace only the
+audio-conditioned attention contribution into `t_AB`, leaving its residual/MLP
+free) is the coherent version. Any such run needs a non-trivial matched sham and
+pre-registered output-quality gates, so that "no refusal marker in garbage output"
+is scored as intervention failure rather than successful blocking.
