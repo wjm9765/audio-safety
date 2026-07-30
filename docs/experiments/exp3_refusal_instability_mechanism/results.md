@@ -21,6 +21,9 @@
 | safety-specific claim | **forbidden** — interaction includes 0 (exp3-001) |
 | content-invariance of the contrast | **not established**; human audit outstanding |
 | `echo` / `tone` breadth arms | still disabled (`rules.md` §4) |
+| `t_AB` hand-off narrative | **retracted** (exp3-003) |
+| routing: relay vs R-avoiding | **mixed/ambiguous**, r=0.737 [0.645,0.836] (exp3-004) |
+| consolidated handoff | [`handoff_20260730.md`](handoff_20260730.md) |
 
 ---
 
@@ -390,3 +393,99 @@ audio-conditioned attention contribution into `t_AB`, leaving its residual/MLP
 free) is the coherent version. Any such run needs a non-trivial matched sham and
 pre-registered output-quality gates, so that "no refusal marker in garbage output"
 is scored as intervention failure rather than successful blocking.
+
+---
+
+## exp3-004 — relay-closure routing test (2026-07-30) — GPU
+
+Artifact `relay_closure/records.jsonl` inside `exp3_20260729_1445_qwen_phase_mechanism`.
+904 cells = 113 cohort pairs × 2 directions × 4 arms. Script
+`scripts/exp3/relay_closure.py`. Decision rule frozen in that script's docstring
+before execution.
+
+### Question
+
+exp3-003 established that neither tested intermediate answer-position state is an
+exclusive bottleneck. This asks the routing question directly: does the L10
+audio-span effect reach the output *through* the prompt tokens that sit between
+the audio and the readout, or around them?
+
+### Measured prompt geometry
+
+| positions | contents | count |
+|---|---|---|
+| `0 … a0−1` | `<\|im_start\|>system … Audio 1:` | 20 |
+| `a0 … a1` | audio tokens (injection site) | 74–247 (78 in the first pair) |
+| `a1+1 … t−1` | **R (relay set)**: `<\|audio_eos\|>\nPlease respond to the request in the audio.<\|im_end\|>\n<\|im_start\|>assistant` | **15** |
+| `t` | `t_AB`, the readout | 1 |
+
+### Intervention
+
+Inject the donor audio span at L10, then overwrite every R position with its
+**host** state after every decoder block from L11 to L31 (21 layers).
+
+Equivalence argument (supplied in review): in a causal transformer, contaminated
+R output at layer L cannot affect other positions within that same layer, because
+they read R's layer-*input* state. Clamping R after every block destroys the
+contamination before it can become R's K/V at the next block; by induction
+nothing leaks through R. R has no other contaminated predecessor in this
+geometry, so the state clamp is equivalent to closing A→R edges here. R is not
+unembedded, so unlike a `t_AB` clamp no outcome can be forced algebraically.
+
+Arms: `identity` (host self-patch at L10), `open` (donor at L10),
+`relay_closed` (open + R clamped), `sham_preaudio` (open + the 20 pre-audio
+positions clamped; those cannot attend to the audio, so this must be an exact
+no-op).
+
+### Validity gates — all passed
+
+| gate | result |
+|---|---|
+| `identity` reproduces baseline | **226/226** exact |
+| `sham_preaudio` reproduces `open` | **226/226** exact, 0 mismatches |
+| hooks applied exactly once (1- and 22-hook compositions) | pass |
+| quality-flagged generations | 1 of 904 (in `relay_closed`) |
+
+### Result (pair-clustered, n=73 discordant pairs)
+
+| arm | donorward |
+|---|---|
+| `open` | +0.781 ±0.066 |
+| `relay_closed` | +0.575 ±0.065 |
+| `sham_preaudio` | +0.781 ±0.066 |
+
+**Retention r = donorward(relay_closed) / donorward(open) = 0.737, 95%
+cluster-bootstrap CI [0.645, 0.836]** (20,000 resamples over pair IDs).
+
+Frozen decision rule: CI entirely ≤0.20 ⇒ relay necessary; CI entirely ≥0.80 ⇒
+R-avoiding routes sufficient; otherwise mixed/ambiguous with no binary claim.
+
+**Verdict: MIXED / AMBIGUOUS.** The interval lies between the two thresholds, so
+neither pre-registered conclusion is licensed.
+
+### What the interval does support
+
+- The relay is **not necessary**: clamping all 15 R positions across 21 layers
+  leaves 73.7% of the effect, CI lower bound 0.645.
+- The relay is **not inert** either: the 26% reduction has an upper CI bound of
+  0.836, below 1, and closing it reversed the injected decision in **6 of 73**
+  pairs.
+
+Combined with exp3-003 (clamping `t_AB` at L18 leaves 75.4%), no single tested
+route carries a majority of the effect on its own.
+
+### Explicitly not licensed
+
+- "R-avoiding routes are sufficient" — the CI does not reach the 0.80 threshold.
+- "The effect is direct audio→readout" — even had the threshold been met, this
+  would not follow: generated positions can attend to the audio themselves and
+  relay through earlier generated positions, a third route this design does not
+  close.
+- Any additive decomposition of the two routes; they are counterfactual
+  capacities, not mediation shares.
+
+### Pre-registered stop rule reached
+
+The review-supplied stop rule states that if intervals straddle the material
+threshold, further ablations on this cohort will not add power and more
+independent pairs are required. The interval half-width here is ±0.10 at n=73.
