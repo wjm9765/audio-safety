@@ -101,8 +101,17 @@ def curve(ax, layers, stats, cond, index) -> float:
         alpha=0.13,
         linewidth=0,
     )
-    ax.plot(layers, ys, color=color, linewidth=2, marker="o", markersize=5,
-            markeredgecolor=SURFACE, markeredgewidth=1.2, zorder=3)
+    ax.plot(
+        layers,
+        ys,
+        color=color,
+        linewidth=2,
+        marker="o",
+        markersize=5,
+        markeredgecolor=SURFACE,
+        markeredgewidth=1.2,
+        zorder=3,
+    )
     return ys[-1]
 
 
@@ -156,8 +165,14 @@ def main() -> None:
     ends = {cond: curve(ax, layers, span, cond, 0) for cond in conds}
     ax.axhline(0, color=INK2, linewidth=1, alpha=0.5)
     place_labels(ax, ends, layers[-1], min_gap=0.115)
-    ax.set_title("A · Transport toward the paired donor", color=INK, fontsize=11,
-                 loc="left", fontweight="semibold", pad=10)
+    ax.set_title(
+        "A · Transport toward the paired donor",
+        color=INK,
+        fontsize=11,
+        loc="left",
+        fontweight="semibold",
+        pad=10,
+    )
     ax.set_xlabel("LLM layer", color=INK2, fontsize=9.5)
     ax.set_ylabel("T  (direction-odd)", color=INK2, fontsize=9.5)
     ax.set_xlim(layers[0] - 0.5, layers[-1] + 5.2)
@@ -167,42 +182,99 @@ def main() -> None:
     ends = {cond: curve(ax, layers, span, cond, 2) for cond in conds}
     ax.axhline(0, color=INK2, linewidth=1, alpha=0.5)
     place_labels(ax, ends, layers[-1], min_gap=0.155)
-    ax.set_title("B · Common-mode push, regardless of donor", color=INK, fontsize=11,
-                 loc="left", fontweight="semibold", pad=10)
+    ax.set_title(
+        "B · Common-mode push, regardless of donor",
+        color=INK,
+        fontsize=11,
+        loc="left",
+        fontweight="semibold",
+        pad=10,
+    )
     ax.set_xlabel("LLM layer", color=INK2, fontsize=9.5)
     ax.set_ylabel("G  (direction-even)", color=INK2, fontsize=9.5)
     ax.set_xlim(layers[0] - 0.5, layers[-1] + 5.2)
     ax.set_ylim(-1.05, 1.55)
-    ax.annotate("only `real` sits at zero —\nit transports without pushing",
-                xy=(12, 0.018), xytext=(8.6, 0.72), color=INK2, fontsize=8.5,
-                arrowprops=dict(arrowstyle="->", color=INK2, linewidth=1))
+    ax.annotate(
+        "only `real` sits at zero —\nit transports without pushing",
+        xy=(12, 0.018),
+        xytext=(8.6, 0.72),
+        color=INK2,
+        fontsize=8.5,
+        arrowprops=dict(arrowstyle="->", color=INK2, linewidth=1),
+    )
 
     ax = axes[1][0]
     style(ax)
     sl = [span[("real", lay)][0] for lay in layers]
     sh = [span[("real", lay)][1] for lay in layers]
-    ax.fill_between(layers, [a - b for a, b in zip(sl, sh, strict=True)],
-                    [a + b for a, b in zip(sl, sh, strict=True)],
-                    color=COLORS["real"], alpha=0.13, linewidth=0)
-    ax.plot(layers, sl, color=COLORS["real"], linewidth=2, marker="o", markersize=5,
-            markeredgecolor=SURFACE, markeredgewidth=1.2)
+    ax.fill_between(
+        layers,
+        [a - b for a, b in zip(sl, sh, strict=True)],
+        [a + b for a, b in zip(sl, sh, strict=True)],
+        color=COLORS["real"],
+        alpha=0.13,
+        linewidth=0,
+    )
+    ax.plot(
+        layers,
+        sl,
+        color=COLORS["real"],
+        linewidth=2,
+        marker="o",
+        markersize=5,
+        markeredgecolor=SURFACE,
+        markeredgewidth=1.2,
+    )
     rl = sorted({lay for _c, lay in read})
     ry = [read[("real", lay)][0] for lay in rl]
     rh = [read[("real", lay)][1] for lay in rl]
-    ax.errorbar(rl, ry, yerr=rh, color=T_AB_COLOR, linewidth=2, marker="s", markersize=6,
-                markeredgecolor=SURFACE, markeredgewidth=1.2, capsize=3)
+    ax.errorbar(
+        rl,
+        ry,
+        yerr=rh,
+        color=T_AB_COLOR,
+        linewidth=2,
+        marker="s",
+        markersize=6,
+        markeredgecolor=SURFACE,
+        markeredgewidth=1.2,
+        capsize=3,
+    )
     ax.axhline(0, color=INK2, linewidth=1, alpha=0.5)
-    ax.annotate("whole audio span", xy=(12, sl[2]), xytext=(7.4, 1.42),
-                color=COLORS["real"], fontsize=9, fontweight="medium",
-                arrowprops=dict(arrowstyle="-", color=COLORS["real"], linewidth=0.9, alpha=0.6))
-    ax.annotate("single t_AB position", xy=(26, 0.90), xytext=(19.5, 0.30),
-                color=T_AB_COLOR, fontsize=9, fontweight="medium",
-                arrowprops=dict(arrowstyle="-", color=T_AB_COLOR, linewidth=0.9, alpha=0.6))
-    ax.annotate("at L10 the signal is in the audio\ntokens, not yet at the readout",
-                xy=(10, 0.05), xytext=(11.0, 0.62), color=INK2, fontsize=8.5,
-                arrowprops=dict(arrowstyle="->", color=INK2, linewidth=1))
-    ax.set_title("C · Hand-off to the readout position", color=INK,
-                 fontsize=11, loc="left", fontweight="semibold", pad=10)
+    ax.annotate(
+        "whole audio span",
+        xy=(12, sl[2]),
+        xytext=(7.4, 1.42),
+        color=COLORS["real"],
+        fontsize=9,
+        fontweight="medium",
+        arrowprops=dict(arrowstyle="-", color=COLORS["real"], linewidth=0.9, alpha=0.6),
+    )
+    ax.annotate(
+        "single t_AB position",
+        xy=(26, 0.90),
+        xytext=(19.5, 0.30),
+        color=T_AB_COLOR,
+        fontsize=9,
+        fontweight="medium",
+        arrowprops=dict(arrowstyle="-", color=T_AB_COLOR, linewidth=0.9, alpha=0.6),
+    )
+    ax.annotate(
+        "at L10 the signal is in the audio\ntokens, not yet at the readout",
+        xy=(10, 0.05),
+        xytext=(11.0, 0.62),
+        color=INK2,
+        fontsize=8.5,
+        arrowprops=dict(arrowstyle="->", color=INK2, linewidth=1),
+    )
+    ax.set_title(
+        "C · Hand-off to the readout position",
+        color=INK,
+        fontsize=11,
+        loc="left",
+        fontweight="semibold",
+        pad=10,
+    )
     ax.set_xlabel("LLM layer", color=INK2, fontsize=9.5)
     ax.set_ylabel("T", color=INK2, fontsize=9.5)
     ax.set_xlim(6, 33.5)
@@ -223,8 +295,14 @@ def main() -> None:
                 continue
             d = a["donor_r_tab_margin"] - a["baseline_r_tab_margin"]
             s = (d > 0) - (d < 0)
-            vals.append(s * 0.5 * ((a["r_tab_margin"] - a["baseline_r_tab_margin"])
-                                   - (b["r_tab_margin"] - b["baseline_r_tab_margin"])))
+            vals.append(
+                s
+                * 0.5
+                * (
+                    (a["r_tab_margin"] - a["baseline_r_tab_margin"])
+                    - (b["r_tab_margin"] - b["baseline_r_tab_margin"])
+                )
+            )
         h = 1.96 * statistics.stdev(vals) / len(vals) ** 0.5 if len(vals) > 1 else 0.0
         return statistics.mean(vals), h
 
@@ -232,26 +310,58 @@ def main() -> None:
     vals = [esc_T(resets[0], "inject_only")] + [esc_T(r, "inject_reset") for r in resets]
     shades = ["#2a78d6", "#7fb0e6", "#b9d3f2"]
     xs = range(len(vals))
-    ax.bar(xs, [v[0] for v in vals], yerr=[v[1] for v in vals], color=shades[: len(vals)],
-           width=0.58, capsize=4, edgecolor=SURFACE, linewidth=2)
+    ax.bar(
+        xs,
+        [v[0] for v in vals],
+        yerr=[v[1] for v in vals],
+        color=shades[: len(vals)],
+        width=0.58,
+        capsize=4,
+        edgecolor=SURFACE,
+        linewidth=2,
+    )
     for x, (mean, half) in zip(xs, vals, strict=True):
         pct = mean / vals[0][0] * 100
-        ax.annotate(f"{mean:+.3f}" + ("" if x == 0 else f"\n{pct:.1f}% survives"),
-                    xy=(x, mean + half), xytext=(0, 9), textcoords="offset points",
-                    ha="center", color=INK, fontsize=9, fontweight="medium")
+        ax.annotate(
+            f"{mean:+.3f}" + ("" if x == 0 else f"\n{pct:.1f}% survives"),
+            xy=(x, mean + half),
+            xytext=(0, 9),
+            textcoords="offset points",
+            ha="center",
+            color=INK,
+            fontsize=9,
+            fontweight="medium",
+        )
     ax.set_xticks(list(xs))
     ax.set_xticklabels(names, fontsize=8.5, color=INK2)
-    ax.set_title("D · Resetting the span removes the effect", color=INK, fontsize=11,
-                 loc="left", fontweight="semibold", pad=10)
+    ax.set_title(
+        "D · Resetting the span removes the effect",
+        color=INK,
+        fontsize=11,
+        loc="left",
+        fontweight="semibold",
+        pad=10,
+    )
     ax.set_ylabel("T", color=INK2, fontsize=9.5)
     ax.set_ylim(0, max(v[0] + v[1] for v in vals) * 1.34)
 
     fig.suptitle(
         "Qwen2-Audio: a phase-only acoustic edit moves refusal through the audio-token span",
-        color=INK, fontsize=13.5, fontweight="semibold", x=0.055, ha="left", y=0.975)
-    fig.text(0.055, 0.935,
-             "113-pair mechanism cohort · pv_locked vs pv_standard · bands and bars are 95% CI",
-             color=INK2, fontsize=9.5, ha="left")
+        color=INK,
+        fontsize=13.5,
+        fontweight="semibold",
+        x=0.055,
+        ha="left",
+        y=0.975,
+    )
+    fig.text(
+        0.055,
+        0.935,
+        "113-pair mechanism cohort · pv_locked vs pv_standard · bands and bars are 95% CI",
+        color=INK2,
+        fontsize=9.5,
+        ha="left",
+    )
     fig.savefig(out, dpi=200, facecolor=SURFACE, bbox_inches="tight")
     print(f"[exp3] wrote {out}")
 
