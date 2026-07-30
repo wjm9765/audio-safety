@@ -228,3 +228,86 @@ decisive follow-up needs **no new model inference**: a blinded, pre-specified
 human input-equivalence audit over the existing 500 pairs, annotators blind to
 arm and outcome, followed by a frozen analysis of marker disagreement within the
 content-equivalent stratum.
+
+---
+
+## exp3-002 — corrections to exp3-001 and ICLR venue assessment (2026-07-30) — no GPU
+
+`results.md` is append-only, so this entry corrects exp3-001 rather than editing it.
+
+### Two overstatements in exp3-001, now corrected in `analysis.md`
+
+1. **"Net refusal-rate difference includes zero" was written as if it established
+   no marginal change. It does not.** Failing to reject is not equivalence: the
+   harmful CI [−0.086, +0.009] still permits an **8.6-point decrease**. The
+   defensible statement is that marginal-rate testing *fails to reveal* the
+   within-pair churn, not that the marginal rate is unchanged. A pre-specified
+   equivalence test would be needed for the stronger claim.
+2. **The Exp2 sweep agreement is a robustness rerun, not an independent
+   replication.** It uses the *same 500 items and the same renders*; only the
+   generation contract differs. exp3-001 called it "replication".
+
+Also: "phase-only input" is technically inaccurate and is replaced by
+**"phase-handling synthesis contrast"** — re-analysis into model features turns
+phase-handling differences into magnitude-feature differences, and M1 shows
+‖ΔF‖ is substantial.
+
+### Venue assessment (`gpt-5.6-sol` xhigh, round 3, as ICLR area chair)
+
+**Verdict: workshop paper now; ICLR main track only after substantial additional
+evidence.** Predicted reviews 3–6, modal 4–5, mean ≈4.5, acceptance ≈15%
+(range 8–25%). Most likely rejection reason: a careful single-model
+replication/extension of a phenomenon already reported by Acoustic Interference
+(2605.18168) and StyleBreak (2511.10692), where the genuinely new causal
+localization is narrow and not behaviourally validated end-to-end.
+
+This is **consistent with the project's own earlier two-reviewer consensus**
+(2026-07-24): *as-is 3/10; 5–6 after 2-model × family replication + blinded
+relabel*, with white space judged "thin and negative", mostly owned by HARC
+(2607.00572), ReGap (2605.18104), **GACL (2606.05161)**, MTAM (2509.24215) and
+AIA. Note GACL was **not** included in the round-3 prompt, and it owns same-audio
+counterfactuals (64.1% sign flip) plus answer-position localization (ρ=0.93)
+across 5 ALMs — so the round-3 estimate is, if anything, optimistic. GACL's task
+is modality arbitration rather than refusal, which is where daylight remains.
+
+### The single defensible novelty sentence
+
+> For content-equivalent phase-handling variants of the same recording,
+> pair-matched audio-span interchange at L10 transfers the eventual refusal
+> outcome, while resetting only those audio-token states at L12 nearly eliminates
+> the transfer — localizing an **early, item-matched causal carrier that
+> final-layer refusal-direction analyses do not identify**.
+
+It may **not** be extended with "…which then moves to `t_AB` by L18 and causes
+refusal". The L18 behavioural null and the 38.4% `R_tAB`/marker sign disagreement
+prohibit that; the proposed hand-off is currently the weakest link in the story,
+not a supported result.
+
+### Required before an ICLR main-track attempt
+
+| # | Work | Objection it kills | Cost |
+|---|---|---|---|
+| 1 | Human/LLM **semantic** labelling of all 102 discordant pairs + matched stable controls | the 20% may be lexical-marker churn, not refusal change | **0 GPU** (204 generations already on disk) |
+| 2 | Full-generation `t_AB` patching L14–L31 scored semantically, plus a **reset-and-rescue** test | repairs or falsifies the audio-span → readout hand-off | 3–6 GPU-h |
+| 3 | Head-to-head against AIA's closest patching protocol on this cohort | shows what the reset localization adds beyond the nearest paper | 5–12 GPU-h + implementation |
+| 4 | Safety-specificity control: same edit on matched non-safety output attributes | benign (0.220) ≥ harmful (0.197); may be generic decoder instability | ~5 GPU-h |
+| 5 | Second audio system | single-model result | MiniCPM 5–8 h (**within Qwen2 LLM family** — a second *system*, not an independent backbone); Ultravox/Llama needs new conversation + readout adapters, ~1 day |
+| 6 | A second phase-handling manipulation or strength | may be specific to one renderer contrast | ~5 GPU-h per condition |
+| 7 | Treatment-fidelity characterisation (loudness/duration/spectral) | keeps "phase-handling" technically accurate | <1 GPU-h |
+| 8 | Simultaneous/hierarchical inference across layers; drop or formalise the equivalence implication | layerwise multiplicity; non-significance ≠ unchanged | 0 GPU |
+
+**Reset-and-rescue is the decisive test:** L10 injection transfers the outcome →
+L12 audio reset removes it → a later `t_AB` donor intervention restores it. If
+step 3 fails, the hand-off narrative should be abandoned, not rescued via `R_tAB`.
+
+### To cut or demote
+
+Cut: "refusal axis"; "marginal rate unchanged"; "independent replication";
+"reaches the readout by L18" as a behavioural claim; "phase-only input".
+Demote to appendix: most probe AUROCs (correlational, partly owned, harmful
+encoder at chance), the L31 reproduction (an implementation check), the full
+interpolation/pad-floor ledger, and the 18-cell layer×control table. Report M1's
+temporal/wrong-item comparison as the **null** it is.
+
+Do not bury the benign result, the L18 behavioural null, or the `R_tAB`/marker
+disagreement — reviewers will find them, and hiding them is more damaging.
