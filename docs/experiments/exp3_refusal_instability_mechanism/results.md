@@ -14,7 +14,13 @@
 | environment bring-up (A5000) | done (exp3-000) |
 | pipeline smoke gate, all stages, all conditions | **PASS** (exp3-000) |
 | defects found and fixed before any non-smoke run | 3 (exp3-000) |
-| full phase pilot (500 pairs) | **not started** |
+| full phase pilot (500 pairs) | **complete** (exp3-001) |
+| every pre-registered integrity gate | **PASS** (exp3-001) |
+| phenomenon: paired refusal disagreement | 0.197 harmful / 0.220 benign (exp3-001) |
+| M2 `real` > `wrong_item` at L10 | **PASS** (exp3-001) |
+| safety-specific claim | **forbidden** — interaction includes 0 (exp3-001) |
+| content-invariance of the contrast | **not established**; human audit outstanding |
+| `echo` / `tone` breadth arms | still disabled (`rules.md` §4) |
 
 ---
 
@@ -115,3 +121,110 @@ result.
 
 Smoke gate **PASS** after three fixes. No non-smoke behavioural or mechanistic
 result is claimed in this entry.
+
+---
+
+## exp3-001 — full phase pilot, 500 pairs (2026-07-29) — GPU
+
+Run `exp3_20260729_1445_qwen_phase_mechanism`, commit `275dcab`,
+Qwen2-Audio-7B-Instruct @ `0a095220…`, bf16/sdpa/greedy, 1× RTX A5000.
+14:42 → 19:18 UTC, all seven GPU stages plus analyze, 0 errors.
+Full analysis: `outputs/<run>/analysis.md`; figure `figures/transport.png`.
+
+### Integrity — every pre-registered gate passed
+
+M1 α=0/α=1 endpoints 80/80 exact (max margin err `0.00e+00`); M2 identity 452/452
+exact text and `0.00e+00` margin over 1356 cells; M3 `identity` and `reset_only`
+exactly 0.000; Stage 5 identity 678/678; **final-layer L31 control reproduces the
+donor margin to `0.00e+00`** (n=226); `applied_count` == 1 in all 11,300
+intervention cells. The L31 pass is what licenses reading the L10/L18 nulls as
+mechanistic rather than as a broken pipeline (`rules.md` §6).
+
+### Phenomenon (primary endpoint)
+
+| stratum | n | paired disagreement | R→NR | NR→R | net refusal diff |
+|---|---:|---|---:|---:|---|
+| harmful | 350 | **0.197** [0.154, 0.240] | 41 | 28 | −0.037 [−0.086, **+0.009**] |
+| benign | 150 | **0.220** [0.160, 0.287] | 16 | 17 | +0.007 [−0.067, **+0.080**] |
+
+**Primary CIs exclude zero in both strata; the secondary net-difference CI
+includes zero in both.** ~1 item in 5 changes its refusal label while the
+arm-level refusal rate is statistically indistinguishable — a direct vindication
+of `rules.md` §3.1's choice of paired disagreement over net difference. Exp2's
+exploratory sweep (0.210 / 57 / 47) replicates here at 0.204 / 57 / 45 under a
+pinned revision and system prompt.
+
+Failure-excluded sensitivity is essentially unchanged (0.185 / 0.228), so the 15
+decoding failures do not carry the effect. Exact McNemar p = 0.148 / 1.000: the
+switching is bidirectional, **not** a directional weakening, and conditional on
+the start state the NR→R limb is the stronger one in harmful items. This is not
+a jailbreak result.
+
+### Mechanism
+
+- **M2 (113-pair cohort, 6780 cells).** L10 `real` donorward **+0.781 ±0.067** vs
+  `wrong_item` **+0.425 ±0.080** — the pre-registered contrast passes. L18 is a
+  null (`real` +0.322 indistinguishable from `sham` +0.384). On the continuous
+  margin, `real` is the only condition with common-mode G ≈ 0 (+0.009…+0.062)
+  while every control carries a large |G| (random up to +1.13). Direct paired
+  real−control differences exclude zero in all 18 layer×control cells.
+- **Multi-draw random null** (post-registered robustness, 4068 cells, 3 draws;
+  draw 0 reproduces the registered draw bit-identically 1356/1356). `real`
+  T_resid significant at all six layers (+0.571…+0.173); a random draw scored
+  against its own siblings is null at every layer.
+- **M3.** Resetting the audio span at L12 removes **96.7%** of the injected
+  effect; at L14, 16.5% survives. Path escape is therefore **forbidden** for the
+  L10→L12 window and begins between L12 and L14.
+- **Stage 5.** At L10 the whole audio span gives T = +1.104 but the single `t_AB`
+  position gives **+0.027**; by L18 `t_AB` carries +0.503. The difference is
+  audio-resident before it is readout-resident.
+- **M1.** `pad_floor` inert (median transport 0.016, 1/40 flips) despite 34.8%
+  mean share of ‖ΔF‖. A follow-up run (`exp3_20260730_0200_m1_interaction`) added
+  the missing `valid_only` cell: pad main effect +0.013 ±0.055, **interaction
+  −0.004 ±0.128**, speech share 103.5%. M1 does **not** establish input-level
+  item-specificity at n=40.
+
+### Two pre-registration defects found (neither contaminates the primary)
+
+1. **`wer ≤ 0.20` content gate is mis-specified for Qwen.** It answers a
+   transcription prompt with a carrier phrase, so a word-perfect transcript
+   scores WER 1.0 — one pair has `overlap = 1.000` and `wer = 1.000` at once.
+   112/120 are carrier-quoted, so the gate reads 0/60 for reasons unrelated to
+   content. `rules.md` §5 Stage 6 already forbids using the audit as an exclusion
+   filter, so nothing downstream is affected. Carrier-stripped, both arms
+   transcribe about equally well (41/60 vs 40/60, paired Δoverlap −0.008) and
+   22/60 pairs transcribe identically. **The repair is post-hoc and cannot make
+   the registered gate retroactively pass.**
+2. **`R_tAB` and the refusal marker diverge in sign for 28/73 discordant pairs
+   (38.4%).** A generation can open with a non-refusal prefix and still contain
+   "I cannot" later. The continuous transport statistic and the behavioural
+   donorward score are therefore **not two views of one quantity**, and
+   margin-level specificity does not propagate monotonically into behaviour —
+   at L18 it demonstrably does not.
+
+### Claim ladder (after two rounds of `gpt-5.6-sol` xhigh review)
+
+Supported: bidirectional phase-handling sensitivity of the explicit-refusal
+marker with no detectable marginal-rate change; a **pair-matched
+audio-conditioned representation causally effective on the refusal-margin
+readout**, above each host's own random baseline; and a layer profile *consistent
+with* an early distributed signal becoming progressively available at the answer
+position.
+
+Not supported: safety specificity (benign ≥ harmful, interaction includes 0);
+"phase alone with perceived content held constant" (content equivalence was never
+validly evaluated); a discovered refusal axis (full spans/states were patched);
+inert controls (they are substantial — `real` is an excess over them); L31 as a
+causal locus (it is an indexing/readout control); an encoder-level refusal
+representation (harmful-only AUROC 0.512, chance); input-level item-specificity;
+or generalisation beyond Qwen2-Audio and beyond the phase contrast.
+
+### Biggest remaining threat and the cheapest test
+
+The contrast is **phase-handling**, not demonstrated **content-invariant**:
+carrier-corrected WER is still 0.316/0.376, only ~2/3 of audited outputs are
+content-faithful, and `pv_standard` carries more decoding failures. The cheapest
+decisive follow-up needs **no new model inference**: a blinded, pre-specified
+human input-equivalence audit over the existing 500 pairs, annotators blind to
+arm and outcome, followed by a frozen analysis of marker disagreement within the
+content-equivalent stratum.
