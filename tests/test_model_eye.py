@@ -85,6 +85,27 @@ def test_all_component_is_the_exact_delta_so_dose_endpoints_reproduce_arms():
     np.testing.assert_array_equal(_component(delta, "all"), delta)
 
 
+def test_valid_only_identifies_the_speech_x_pad_interaction():
+    """`all` splits into exactly two orthogonal supports, so the 2x2 is identified.
+
+    Without a valid-frames-only arm there is no y(1,0) cell and the interaction
+    I = y(1,1) - y(1,0) - y(0,1) + y(0,0) cannot be estimated, which is what
+    licenses attributing an `all` effect to the speech region rather than to the
+    Whisper global-floor pathway.
+    """
+
+    delta = _padded_delta()
+    valid = _component(delta, "valid_only")
+    pad = _component(delta, "pad_floor")
+    np.testing.assert_array_equal(valid[..., 7:], 0.0)
+    np.testing.assert_array_equal(valid[..., :7], delta[..., :7])
+    np.testing.assert_array_equal(valid + pad, _component(delta, "all"))
+    # The temporal split is a refinement of valid_only, not of all.
+    slow = _component(delta, "temporal_slow")
+    fast = _component(delta, "temporal_fast")
+    np.testing.assert_allclose(slow + fast, valid, rtol=2e-6, atol=2e-7)
+
+
 def test_pad_floor_completes_the_decomposition():
     delta = _padded_delta()
     slow = _component(delta, "temporal_slow")

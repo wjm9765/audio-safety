@@ -7,7 +7,13 @@ from typing import Literal
 import numpy as np
 
 ModelEyeComponent = Literal[
-    "all", "temporal_fast", "temporal_slow", "time_shift", "wrong_item", "pad_floor"
+    "all",
+    "temporal_fast",
+    "temporal_slow",
+    "time_shift",
+    "wrong_item",
+    "pad_floor",
+    "valid_only",
 ]
 PatchControl = Literal["real", "identity", "wrong_item", "random_direction", "position_sham"]
 
@@ -125,6 +131,13 @@ def model_eye_component(
     if component == "pad_floor":
         output = np.zeros_like(delta)
         output[..., valid_length:] = delta[..., valid_length:]
+        return output
+    if component == "valid_only":
+        # The speech-region arm of the 2x2 (speech x pad) decomposition:
+        # all == valid_only + pad_floor, so the interaction
+        # I = y(1,1) - y(1,0) - y(0,1) + y(0,0) is identified.
+        output = np.zeros_like(delta)
+        output[..., :valid_length] = core
         return output
     if component in {"temporal_slow", "temporal_fast"}:
         slow, fast = temporal_modulation_split(

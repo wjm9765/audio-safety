@@ -704,7 +704,15 @@ class Exp3InputDoseConfig(StrictModel):
     contrast: str = "phase"
     doses: list[float] = Field(default_factory=lambda: [0.0, 0.25, 0.5, 0.75, 1.0])
     components: list[
-        Literal["all", "temporal_fast", "temporal_slow", "time_shift", "wrong_item", "pad_floor"]
+        Literal[
+            "all",
+            "temporal_fast",
+            "temporal_slow",
+            "time_shift",
+            "wrong_item",
+            "pad_floor",
+            "valid_only",
+        ]
     ] = Field(
         default_factory=lambda: cast(
             list[
@@ -715,6 +723,7 @@ class Exp3InputDoseConfig(StrictModel):
                     "time_shift",
                     "wrong_item",
                     "pad_floor",
+                    "valid_only",
                 ]
             ],
             ["all"],
