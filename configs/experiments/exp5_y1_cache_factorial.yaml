@@ -1,0 +1,54 @@
+# Exp5 pre-registered follow-up to Exp4: adds the first generated token as a
+# third factor. Freeze before the first non-smoke GPU run. Everything except the
+# condition set is inherited unchanged from the Exp4 config so the intervention,
+# model revision, prompt, matcher and thresholds are identical.
+name: exp5_y1_cache_factorial
+seed: 0
+source_exp3_config: configs/experiments/exp3_qwen_refusal_mechanism.yaml
+
+exp4:
+  enabled: true
+  schema_version: exp5.v1
+  source_exp3_run: exp3_20260729_1445_qwen_phase_mechanism
+  source_cohort_file: inputs/mechanism_cohort.jsonl
+  source_span_patch_file: span_patch/records.jsonl
+  source_relay_file: relay_closure/records.jsonl
+  contrast: phase
+
+  inject_layer: 10
+  relay_start_layer: 11
+  expected_relay_positions: 15
+  directions: [source_to_target, target_to_source]
+
+  # Physical H/D endpoints are measured on the executing device; see Exp4
+  # design.md 9 (2026-07-31).
+  endpoint_policy: current_hardware
+
+  # Full 2x2x2: audio cache x t_AB cache x first generated token.
+  conditions:
+    - audio_injected__tab_injected
+    - audio_host__tab_injected
+    - audio_injected__tab_host
+    - audio_host__tab_host
+    - audio_injected__tab_injected__y1_host
+    - audio_host__tab_injected__y1_host
+    - audio_injected__tab_host__y1_host
+    - audio_host__tab_host__y1_host
+
+  max_pairs: null
+  max_new_tokens: 96
+  n_bootstrap: 20000
+  ci_alpha: 0.05
+  material_effect_min: 0.20
+  negligible_effect_max: 0.10
+  standard_generate_checks: 2
+  cache_atol: 0.0
+
+  artifacts:
+    cohort_file: inputs/cohort.jsonl
+    source_manifest_file: inputs/source_manifest.json
+    endpoints_file: endpoints/physical.jsonl
+    records_file: cache_routing/records.jsonl
+    metrics_file: metrics.json
+    analysis_file: analysis.md
+    errors_file: errors.jsonl

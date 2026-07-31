@@ -969,6 +969,11 @@ class Exp4RoutingConfig(StrictModel):
             "audio_host__tab_injected",
             "audio_injected__tab_host",
             "audio_host__tab_host",
+            # Exp5 adds the first generated token as a third factor.
+            "audio_injected__tab_injected__y1_host",
+            "audio_host__tab_injected__y1_host",
+            "audio_injected__tab_host__y1_host",
+            "audio_host__tab_host__y1_host",
         ]
     ] = Field(
         default_factory=lambda: cast(
@@ -1005,16 +1010,20 @@ class Exp4RoutingConfig(StrictModel):
 
     @model_validator(mode="after")
     def _validate_routing_design(self) -> "Exp4RoutingConfig":
-        expected_conditions = {
+        cache_2x2 = {
             "audio_injected__tab_injected",
             "audio_host__tab_injected",
             "audio_injected__tab_host",
             "audio_host__tab_host",
         }
+        full_2x2x2 = cache_2x2 | {name + "__y1_host" for name in cache_2x2}
         if len(self.conditions) != len(set(self.conditions)):
-            raise ValueError("Exp4 conditions must be unique")
-        if set(self.conditions) != expected_conditions:
-            raise ValueError("Exp4 requires the complete frozen 2x2 condition set")
+            raise ValueError("Exp4/Exp5 conditions must be unique")
+        if set(self.conditions) not in (cache_2x2, full_2x2x2):
+            raise ValueError(
+                "conditions must be exactly the frozen Exp4 2x2 cache set, or the "
+                "complete Exp5 2x2x2 set that adds the y1 factor"
+            )
         if len(self.directions) != len(set(self.directions)):
             raise ValueError("Exp4 directions must be unique")
         if self.relay_start_layer <= self.inject_layer:

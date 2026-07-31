@@ -48,6 +48,30 @@ CONDITION_CODES = {
     "audio_injected__tab_host": "IH",
     "audio_host__tab_host": "HH",
 }
+# Exp5 adds the first generated token as a third factor. A condition name gains
+# a `__y1_host` suffix; the bare Exp4 names keep meaning "y1 from the injected
+# trajectory", so Exp4 configs and records are unaffected.
+Y1_HOST_SUFFIX = "__y1_host"
+
+
+def condition_parts(condition: str) -> tuple[str, str, str]:
+    """(audio cache source, t_AB cache source, y1 source) for a condition name."""
+
+    base, y1_source = condition, "injected"
+    if condition.endswith(Y1_HOST_SUFFIX):
+        base, y1_source = condition[: -len(Y1_HOST_SUFFIX)], "host"
+    if base not in CONDITION_SOURCES:
+        raise ValueError(f"unknown Exp4/Exp5 condition {condition!r}")
+    audio_source, tab_source = CONDITION_SOURCES[base]
+    return audio_source, tab_source, y1_source
+
+
+def condition_code(condition: str) -> str:
+    """Three-letter cell code, e.g. `IIH` = injected audio, injected t_AB, host y1."""
+
+    audio_source, tab_source, y1_source = condition_parts(condition)
+    letters = {"injected": "I", "host": "H"}
+    return letters[audio_source] + letters[tab_source] + letters[y1_source]
 
 
 @dataclass
@@ -728,7 +752,7 @@ def _condition_cache(
     audio_positions: Sequence[int],
     t_ab: int,
 ) -> Any:
-    audio_source, tab_source = CONDITION_SOURCES[condition]
+    audio_source, tab_source, _y1_source = condition_parts(condition)
     result = clone_kv_cache(injected_cache)
     if audio_source == "host":
         result = transplant_cache_positions(result, host_cache, audio_positions)
@@ -1064,6 +1088,8 @@ def run_cache_routing(
                     audio_positions=audio_positions,
                     t_ab=t_ab,
                 )
+                _a_src, _t_src, y1_source = condition_parts(condition)
+                cell_y1 = fixed_y1 if y1_source == "injected" else host_y1
                 generated = manual_greedy_decode(
                     cfg,
                     model,
@@ -1071,7 +1097,7 @@ def run_cache_routing(
                     cache=cell_cache,
                     prompt_attention_mask=host["inputs"]["attention_mask"],
                     prompt_input_ids=host["inputs"]["input_ids"],
-                    first_token_id=fixed_y1,
+                    first_token_id=cell_y1,
                 )
                 standard_exact = None
                 standard_margin_error = None
@@ -1093,10 +1119,14 @@ def run_cache_routing(
                 # independently recomputed physical-host generation on THIS
                 # replica, not the source run's text. Comparing across devices
                 # tests floating-point portability, not cache closure.
+                # Under a host cache AND a host y1 the cell is the physical host
+                # computation, so it must reproduce it regardless of whether the
+                # injection moved y1. With an injected y1 the check only applies
+                # where the injection left y1 unchanged (Exp4 gate 8a).
                 host_reproduction_exact = None
                 if (
-                    condition == "audio_host__tab_host"
-                    and fixed_y1 == host_y1
+                    condition_code(condition).startswith("HH")
+                    and (y1_source == "host" or fixed_y1 == host_y1)
                     and cfg.exp4.max_new_tokens == cfg.exp3.max_new_tokens
                 ):
                     host_reproduction_exact = (
@@ -1105,11 +1135,12 @@ def run_cache_routing(
                     )
                     if not host_reproduction_exact:
                         raise RuntimeError(
-                            "HH cache with unchanged y1 did not reproduce the current-device "
-                            f"physical host generation for {pair['pair_id']} {direction}"
+                            "fully host-closed cell did not reproduce the current-device "
+                            f"physical host generation for {pair['pair_id']} {direction} "
+                            f"{condition}"
                         )
 
-                audio_source, tab_source = CONDITION_SOURCES[condition]
+                audio_source, tab_source, _ = condition_parts(condition)
                 key = (str(pair["pair_id"]), direction, condition)
                 state[key] = {
                     "schema_version": cfg.exp4.schema_version,
@@ -1129,11 +1160,13 @@ def run_cache_routing(
                     "shard_count": shard_count,
                     "direction": direction,
                     "condition": condition,
-                    "condition_code": CONDITION_CODES[condition],
+                    "condition_code": condition_code(condition),
                     "host_arm": host_arm,
                     "donor_arm": donor_arm,
                     "audio_cache_source": audio_source,
                     "t_ab_cache_source": tab_source,
+                    "y1_source": y1_source,
+                    "cell_y1_id": cell_y1,
                     "inject_layer": cfg.exp4.inject_layer,
                     "clamp_layers": [clamp_layers[0], clamp_layers[-1]],
                     "n_audio_positions": len(audio_positions),
@@ -1173,6 +1206,31 @@ def run_cache_routing(
                     every=8,
                 )
                 del cell_cache
+
+            # Gate 6 (Exp5 design.md §3): where the injection left y1 unchanged
+            # the two y1 levels are the same intervention, so their cells must be
+            # token-identical. A mismatch means the y1 factor is not wired to the
+            # decode it claims to control.
+            if fixed_y1 == host_y1:
+                for condition in cfg.exp4.conditions:
+                    if not condition.endswith(Y1_HOST_SUFFIX):
+                        continue
+                    injected_key = (
+                        str(pair["pair_id"]),
+                        direction,
+                        condition[: -len(Y1_HOST_SUFFIX)],
+                    )
+                    host_key = (str(pair["pair_id"]), direction, condition)
+                    if injected_key not in state or host_key not in state:
+                        continue
+                    if (
+                        state[injected_key]["generated_token_ids"]
+                        != state[host_key]["generated_token_ids"]
+                    ):
+                        raise RuntimeError(
+                            "y1-degenerate cells diverged despite an identical first token: "
+                            f"{pair['pair_id']} {direction} {condition}"
+                        )
         print(
             f"[exp4] shard {shard_index}/{shard_count} "
             f"pair {pair_index + 1}/{len(cohort)} completed_cells={completed}",
@@ -1294,6 +1352,30 @@ def analyze_records(cfg: Exp4RunConfig, rows: Sequence[Mapping[str, Any]]) -> di
     if incomplete:
         raise ValueError(f"incomplete primary Exp4 2x2 cells: {incomplete[:5]}")
 
+    # Exp5 primary population: directions where the injection actually moved y1.
+    # Where it did not, the y1 factor is degenerate and carries no contrast.
+    has_y1_factor = any(
+        condition_parts(condition)[2] == "host" for condition in cfg.exp4.conditions
+    )
+    y1_changed_by_direction = {
+        (str(row["pair_id"]), str(row["direction"])): bool(row["injected_y1_changed_from_host"])
+        for row in primary
+    }
+    if has_y1_factor:
+        restricted = {
+            key: values for key, values in direction_cells.items() if y1_changed_by_direction[key]
+        }
+        if not restricted:
+            raise ValueError("Exp5 analysis has no changed-y1 primary directions")
+        unchanged_cells = {
+            key: values
+            for key, values in direction_cells.items()
+            if not y1_changed_by_direction[key]
+        }
+        direction_cells = restricted
+    else:
+        unchanged_cells = {}
+
     pair_vectors: dict[str, list[dict[str, float]]] = defaultdict(list)
     for (pair_id, _direction), direction_values in direction_cells.items():
         pair_vectors[pair_id].append(direction_values)
@@ -1315,7 +1397,12 @@ def analyze_records(cfg: Exp4RunConfig, rows: Sequence[Mapping[str, Any]]) -> di
             for condition in cfg.exp4.conditions
         }
     ordered = [pair_means[pair_id] for pair_id in sorted(pair_means)]
-    by_code = {CONDITION_CODES[condition]: condition for condition in cfg.exp4.conditions}
+    # Exp4 keeps its two-letter cache codes so its metrics stay comparable;
+    # Exp5 uses three-letter codes that name the y1 level as well.
+    by_code = {
+        (condition_code(condition) if has_y1_factor else CONDITION_CODES[condition]): condition
+        for condition in cfg.exp4.conditions
+    }
 
     cells: dict[str, dict[str, Any]] = {}
     for code, condition in sorted(by_code.items()):
@@ -1326,24 +1413,56 @@ def analyze_records(cfg: Exp4RunConfig, rows: Sequence[Mapping[str, Any]]) -> di
             ci_alpha=cfg.exp4.ci_alpha,
         )
 
-    contrast_values = {
-        "D_audio": [vector[by_code["II"]] - vector[by_code["HI"]] for vector in ordered],
-        "D_tAB": [vector[by_code["II"]] - vector[by_code["IH"]] for vector in ordered],
-        "D_joint": [vector[by_code["II"]] - vector[by_code["HH"]] for vector in ordered],
-        "D_audio_given_tAB_host": [
-            vector[by_code["IH"]] - vector[by_code["HH"]] for vector in ordered
-        ],
-        "D_tAB_given_audio_host": [
-            vector[by_code["HI"]] - vector[by_code["HH"]] for vector in ordered
-        ],
-        "factorial_interaction": [
-            vector[by_code["II"]]
-            - vector[by_code["HI"]]
-            - vector[by_code["IH"]]
-            + vector[by_code["HH"]]
-            for vector in ordered
-        ],
-    }
+    def diff(left: str, right: str) -> list[float]:
+        return [vector[by_code[left]] - vector[by_code[right]] for vector in ordered]
+
+    if has_y1_factor:
+        contrast_values = {
+            # Exp5 design.md §0 primary
+            "D_joint_y1H": diff("IIH", "HHH"),
+            "D_y1_at_HH": diff("HHI", "HHH"),
+            # secondary route contrasts under a host first token
+            "D_audio_y1H": diff("IIH", "HIH"),
+            "D_tAB_y1H": diff("IIH", "IHH"),
+            # y1 simple effects at each cache state
+            "D_y1_at_II": diff("III", "IIH"),
+            "D_y1_at_HI": diff("HII", "HIH"),
+            "D_y1_at_IH": diff("IHI", "IHH"),
+            # the Exp4 cache contrasts, recomputed on this population
+            "D_audio_y1I": diff("III", "HII"),
+            "D_tAB_y1I": diff("III", "IHI"),
+            "D_joint_y1I": diff("III", "HHI"),
+            "three_way_interaction": [
+                (a - b - c + d) - (e - f - g + h)
+                for a, b, c, d, e, f, g, h in zip(
+                    *(
+                        [vector[by_code[code]] for vector in ordered]
+                        for code in ("III", "HII", "IHI", "HHI", "IIH", "HIH", "IHH", "HHH")
+                    ),
+                    strict=True,
+                )
+            ],
+        }
+        decision_names = {"D_joint_y1H", "D_y1_at_HH"}
+    else:
+        contrast_values = {
+            "D_audio": diff("II", "HI"),
+            "D_tAB": diff("II", "IH"),
+            "D_joint": diff("II", "HH"),
+            "D_audio_given_tAB_host": diff("IH", "HH"),
+            "D_tAB_given_audio_host": diff("HI", "HH"),
+            "factorial_interaction": [
+                a - b - c + d
+                for a, b, c, d in zip(
+                    *(
+                        [vector[by_code[code]] for vector in ordered]
+                        for code in ("II", "HI", "IH", "HH")
+                    ),
+                    strict=True,
+                )
+            ],
+        }
+        decision_names = {"D_audio", "D_tAB", "D_joint"}
     contrasts = {}
     for name, values in contrast_values.items():
         summary = _mean_ci(
@@ -1352,9 +1471,31 @@ def analyze_records(cfg: Exp4RunConfig, rows: Sequence[Mapping[str, Any]]) -> di
             n_bootstrap=cfg.exp4.n_bootstrap,
             ci_alpha=cfg.exp4.ci_alpha,
         )
-        if name in {"D_audio", "D_tAB", "D_joint"}:
+        if name in decision_names:
             summary["decision"] = _effect_decision(cfg, summary)
         contrasts[name] = summary
+
+    # Descriptive: the cache contrasts in the subpopulation where y1 was already
+    # unchanged, i.e. where the cache is the only channel for injected content.
+    unchanged_y1_cells: dict[str, dict[str, Any]] = {}
+    if has_y1_factor and unchanged_cells:
+        grouped: dict[str, list[dict[str, float]]] = defaultdict(list)
+        for (pair_id, _direction), values in unchanged_cells.items():
+            grouped[pair_id].append(values)
+        vectors = [
+            {
+                condition: float(np.mean([v[condition] for v in per_pair]))
+                for condition in cfg.exp4.conditions
+            }
+            for _pair_id, per_pair in sorted(grouped.items())
+        ]
+        for code, condition in sorted(by_code.items()):
+            unchanged_y1_cells[f"T_{code}"] = _mean_ci(
+                [vector[condition] for vector in vectors],
+                seed=_stable_int(cfg.seed, "exp5", "unchanged", code),
+                n_bootstrap=cfg.exp4.n_bootstrap,
+                ci_alpha=cfg.exp4.ci_alpha,
+            )
 
     hh_primary = [row for row in primary if row["condition"] == "audio_host__tab_host"]
     y1_strata = {}
@@ -1378,7 +1519,8 @@ def analyze_records(cfg: Exp4RunConfig, rows: Sequence[Mapping[str, Any]]) -> di
     stable_controls = {}
     for condition in cfg.exp4.conditions:
         condition_rows = [row for row in stable if row["condition"] == condition]
-        stable_controls[CONDITION_CODES[condition]] = _mean_ci(
+        code = condition_code(condition) if has_y1_factor else CONDITION_CODES[condition]
+        stable_controls[code] = _mean_ci(
             _clustered_host_marker_change(condition_rows),
             seed=_stable_int(cfg.seed, "exp4", "stable", condition),
             n_bootstrap=cfg.exp4.n_bootstrap,
@@ -1386,15 +1528,26 @@ def analyze_records(cfg: Exp4RunConfig, rows: Sequence[Mapping[str, Any]]) -> di
         )
 
     standard_rows = [row for row in rows if row.get("standard_generate_checked")]
-    hh_rows = [row for row in rows if row["condition"] == "audio_host__tab_host"]
+    # Closure error is recorded once per direction on the injected-y1 HH cell;
+    # host reproduction is checked on every fully host-closed cell.
+    closure_rows = [row for row in rows if row.get("full_host_cache_max_abs_error") is not None]
+    hh_rows = [row for row in rows if row.get("host_reproduction_exact") is not None]
     return {
         "schema_version": cfg.exp4.schema_version,
         "endpoint": "frozen literal explicit-refusal marker",
-        "estimand_scope": "y2 onward conditional on one fixed injected y1",
+        "estimand_scope": (
+            "y2 onward, changed-y1 directions, y1 randomised as a third factor"
+            if has_y1_factor
+            else "y2 onward conditional on one fixed injected y1"
+        ),
+        "design": "exp5.2x2x2" if has_y1_factor else "exp4.2x2",
         "n_rows": len(rows),
         "n_primary_pairs": len(pair_means),
+        "n_primary_directions": len(direction_cells),
+        "n_unchanged_y1_directions": len(unchanged_cells),
         "n_directions_per_pair": len(cfg.exp4.directions),
         "cells": cells,
+        "unchanged_y1_cells": unchanged_y1_cells,
         "contrasts": contrasts,
         "hh_by_injected_y1_change": y1_strata,
         "stable_control_host_marker_change": stable_controls,
@@ -1404,7 +1557,7 @@ def analyze_records(cfg: Exp4RunConfig, rows: Sequence[Mapping[str, Any]]) -> di
                 float(row.get("cache_clone_max_abs_error", float("inf"))) for row in rows
             ),
             "max_full_host_cache_abs_error": max(
-                float(row["full_host_cache_max_abs_error"]) for row in hh_rows
+                float(row["full_host_cache_max_abs_error"]) for row in closure_rows
             ),
             "standard_generate_checks": len(standard_rows),
             "all_standard_generate_exact": all(
@@ -1470,6 +1623,21 @@ def _render_analysis(metrics: Mapping[str, Any]) -> str:
             f"| `{name}` | {_format_interval(summary)} | "
             f"{summary.get('decision', 'descriptive only')} |"
         )
+    if metrics.get("unchanged_y1_cells"):
+        lines.extend(
+            [
+                "",
+                "## Descriptive: unchanged-`y1` directions",
+                "",
+                "The subpopulation in which the cache is the only channel for injected ",
+                "content. Not a pre-registered estimand.",
+                "",
+                "| cell | donorward [95% CI] |",
+                "|---|---:|",
+            ]
+        )
+        for name, summary in metrics["unchanged_y1_cells"].items():
+            lines.append(f"| `{name}` | {_format_interval(summary)} |")
     lines.extend(
         [
             "",

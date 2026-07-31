@@ -10,6 +10,8 @@ from audio_safety.pipelines.exp4_audio_kv_routing import (
     analyze_records,
     cache_max_abs_diff,
     clone_kv_cache,
+    condition_code,
+    condition_parts,
     freeze_source_inputs,
     greedy_logits_processors,
     manual_greedy_decode,
@@ -335,6 +337,82 @@ def test_merge_shard_records_rejects_missing_incomplete_and_foreign_rows(tmp_pat
     _write_jsonl(tmp_path / cfg.exp4.artifacts.records_file, rows[:-1])
     with pytest.raises(RuntimeError, match="differ from the existing canonical"):
         merge_shard_records(cfg, tmp_path, shard_count=2)
+
+
+def test_exp5_factorial_separates_y1_from_the_prompt_cache():
+    """The y1 factor must be estimated only where the injection moved y1."""
+    cfg = load_exp4_config(
+        "configs/experiments/exp5_y1_cache_factorial.yaml",
+        overrides=["exp4.n_bootstrap=200"],
+    )
+    assert len(cfg.exp4.conditions) == 8
+
+    def row(pair, direction, condition, outcome, changed):
+        return {
+            "pair_id": pair,
+            "direction": direction,
+            "condition": condition,
+            "selection_role": "discordant",
+            "baseline_explicit_refusal": False,
+            "donor_explicit_refusal": True,
+            "explicit_refusal": outcome,
+            "injected_y1_changed_from_host": changed,
+            "hook_counts_ok": True,
+            "cache_clone_max_abs_error": 0.0,
+            "full_host_cache_max_abs_error": (0.0 if condition == "audio_host__tab_host" else None),
+            "host_reproduction_exact": True if condition.endswith("y1_host") else None,
+            "standard_generate_checked": False,
+            "standard_generate_exact": None,
+        }
+
+    rows = []
+    for index in range(6):
+        for direction in cfg.exp4.directions:
+            # Half the directions moved y1; only those may carry the y1 contrast.
+            changed = direction == "source_to_target"
+            for condition in cfg.exp4.conditions:
+                y1_host = condition.endswith("__y1_host")
+                # Ground truth: y1 alone drives the marker; the cache does not.
+                outcome = (not y1_host) and changed
+                rows.append(row(f"p{index}", direction, condition, outcome, changed))
+
+    metrics = analyze_records(cfg, rows)
+    assert metrics["design"] == "exp5.2x2x2"
+    assert metrics["n_primary_directions"] == 6
+    assert metrics["n_unchanged_y1_directions"] == 6
+    assert set(metrics["cells"]) == {
+        "T_III",
+        "T_HII",
+        "T_IHI",
+        "T_HHI",
+        "T_IIH",
+        "T_HIH",
+        "T_IHH",
+        "T_HHH",
+    }
+    contrasts = metrics["contrasts"]
+    # y1 carries everything; the prompt cache carries nothing.
+    assert contrasts["D_y1_at_HH"]["estimate"] == 1.0
+    assert contrasts["D_y1_at_HH"]["decision"] == "material_conditional_contributor"
+    assert contrasts["D_joint_y1H"]["estimate"] == 0.0
+    assert contrasts["D_joint_y1H"]["decision"] == "negligible_at_pilot_resolution"
+    assert contrasts["D_audio_y1H"]["estimate"] == 0.0
+    # Only the two pre-registered contrasts get a binary decision.
+    decided = {name for name, v in contrasts.items() if "decision" in v}
+    assert decided == {"D_joint_y1H", "D_y1_at_HH"}
+    # The unchanged-y1 subpopulation is reported but kept out of the estimand.
+    assert metrics["unchanged_y1_cells"]["T_III"]["estimate"] == 0.0
+
+
+def test_exp4_condition_codes_are_unchanged_by_the_y1_extension():
+    cfg = load_exp4_config("configs/experiments/exp4_audio_kv_routing.yaml")
+    assert len(cfg.exp4.conditions) == 4
+    assert condition_parts("audio_host__tab_injected") == ("host", "injected", "injected")
+    assert condition_parts("audio_host__tab_injected__y1_host") == ("host", "injected", "host")
+    assert condition_code("audio_injected__tab_injected") == "III"
+    assert condition_code("audio_host__tab_host__y1_host") == "HHH"
+    with pytest.raises(ValueError, match="unknown"):
+        condition_parts("audio_nonsense__tab_host")
 
 
 def test_source_preflight_freezes_hashes_and_detects_mutation(tmp_path):
