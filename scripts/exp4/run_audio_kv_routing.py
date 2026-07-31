@@ -86,7 +86,23 @@ def _load_model(cfg, paths):
         raise RuntimeError("Exp4 run/all stages require CUDA; preflight/analyze are CPU-only")
     from audio_safety.models.qwen2_audio import load_qwen2_audio
 
-    return load_qwen2_audio(cfg.model, cache_dir=paths.cache_dir)
+    model, processor = load_qwen2_audio(cfg.model, cache_dir=paths.cache_dir)
+    # `device_map: auto` allocates against free memory, so a co-resident shard
+    # can silently push layers to CPU. That changes kernels and would break the
+    # tolerance-zero reproduction gates, so fail instead of running degraded.
+    offloaded = sorted(
+        {
+            name.rsplit(".", 1)[0]
+            for name, parameter in model.named_parameters()
+            if parameter.device.type != "cuda"
+        }
+    )
+    if offloaded:
+        raise RuntimeError(
+            f"Exp4 requires the whole model resident on GPU; {len(offloaded)} module(s) "
+            f"are not on CUDA, first={offloaded[:3]}"
+        )
+    return model, processor
 
 
 def _assert_or_write_snapshot(cfg, run_dir: Path) -> None:

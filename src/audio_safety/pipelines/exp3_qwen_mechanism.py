@@ -839,6 +839,7 @@ def _generate_from_inputs(
             do_sample=False,
             return_dict_in_generate=True,
             output_scores=True,
+            output_logits=True,
         )
     counts = [
         int(intervention.applied_count)
@@ -860,6 +861,10 @@ def _generate_from_inputs(
         "explicit_refusal": classify_explicit_refusal(response, cfg.exp3.readout.refusal_patterns)
         == EXPLICIT_REFUSAL,
         "r_tab_margin": _margin(generated.scores[0][0], refusal_ids, nonrefusal_ids),
+        # `scores` are post-logits-processor; `logits` are the raw model output.
+        # Comparisons against a plain forward pass must use the raw values.
+        "r_tab_margin_raw": _margin(generated.logits[0][0], refusal_ids, nonrefusal_ids),
+        "generated_token_ids": continuation[0].tolist(),
         "applied_counts": counts,
     }
 

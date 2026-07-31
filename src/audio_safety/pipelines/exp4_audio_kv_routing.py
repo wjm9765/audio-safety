@@ -259,16 +259,23 @@ def _expected_standard_checks(
     shard_index: int,
     shard_count: int,
 ) -> int:
-    """Standard-generate checks owned by this shard under global cell numbering."""
+    """Standard-generate equivalence checks owed by one shard.
 
-    n_directions = len(cfg.exp4.directions)
+    Each shard runs the pre-registered number against its own model replica, so
+    a single-shard run performs exactly the pre-registered count and a sharded
+    run performs that many per replica.
+    """
+
+    n_assigned = len(shard_assignment(cohort, shard_index=shard_index, shard_count=shard_count))
+    return min(cfg.exp4.standard_generate_checks, n_assigned * len(cfg.exp4.directions))
+
+
+def total_expected_standard_checks(
+    cfg: Exp4RunConfig, cohort: Sequence[Mapping[str, Any]], *, shard_count: int
+) -> int:
     return sum(
-        1
-        for index, _pair in shard_assignment(
-            cohort, shard_index=shard_index, shard_count=shard_count
-        )
-        for direction_index in range(n_directions)
-        if index * n_directions + direction_index < cfg.exp4.standard_generate_checks
+        _expected_standard_checks(cfg, cohort, shard_index=index, shard_count=shard_count)
+        for index in range(shard_count)
     )
 
 
@@ -373,7 +380,14 @@ def clone_kv_cache(cache: Any) -> Any:
 
 
 def cache_max_abs_diff(left: Any, right: Any) -> float:
-    """Maximum absolute K/V difference across every layer; shapes must agree."""
+    """Maximum absolute K/V difference across every layer; shapes must agree.
+
+    Non-finite entries raise instead of propagating: a NaN difference compares
+    false against every tolerance, so a silent NaN would let the tolerance-zero
+    closure gates in design.md §5 pass on a corrupted cache.
+    """
+
+    import torch
 
     left_layers, right_layers = _cache_layers(left), _cache_layers(right)
     if len(left_layers) != len(right_layers):
@@ -384,6 +398,8 @@ def cache_max_abs_diff(left: Any, right: Any) -> float:
             left_tensor, right_tensor = getattr(left_layer, kind), getattr(right_layer, kind)
             if tuple(left_tensor.shape) != tuple(right_tensor.shape):
                 raise ValueError(f"KV cache {kind} shape differs at layer {index}")
+            if not (torch.isfinite(left_tensor).all() and torch.isfinite(right_tensor).all()):
+                raise ValueError(f"KV cache {kind} contains non-finite values at layer {index}")
             difference = float((left_tensor - right_tensor).detach().abs().max().item())
             maximum = max(maximum, difference)
     return maximum
@@ -507,6 +523,73 @@ def _injected_prefill(
     return cache, outputs.logits[0, -1].detach(), counts
 
 
+def greedy_logits_processors(model: Any) -> Any:
+    """Rebuild the logits processors `generate(do_sample=False)` would apply.
+
+    Qwen2-Audio ships `repetition_penalty: 1.1` in its generation config, so
+    ordinary greedy `model.generate` is NOT plain argmax. Exp3's entire frozen
+    behaviour corpus was produced through that path, so Exp4's manual decoder
+    must reproduce it or it is measuring a different decoder. Sampling warpers
+    (temperature/top_k/top_p) are deliberately excluded: `generate` applies them
+    only when `do_sample=True`.
+
+    Any other generation-config field that would introduce a processor is
+    rejected rather than silently dropped; design.md §5 gate 7 is the empirical
+    proof that this list is complete.
+    """
+
+    from transformers import LogitsProcessorList, RepetitionPenaltyLogitsProcessor
+
+    generation_config = model.generation_config
+    unsupported = {
+        "no_repeat_ngram_size": 0,
+        "encoder_repetition_penalty": 1.0,
+        "bad_words_ids": None,
+        "min_length": 0,
+        "min_new_tokens": None,
+        "forced_bos_token_id": None,
+        "forced_eos_token_id": None,
+        "exponential_decay_length_penalty": None,
+        "suppress_tokens": None,
+        "begin_suppress_tokens": None,
+        "sequence_bias": None,
+        "diversity_penalty": 0.0,
+        "guidance_scale": None,
+        "renormalize_logits": False,
+    }
+    active = [
+        name
+        for name, default in unsupported.items()
+        if getattr(generation_config, name, default) not in (default, None)
+    ]
+    if active:
+        raise NotImplementedError(
+            f"Exp4's manual decoder does not replicate generation-config fields {active}; "
+            "extend greedy_logits_processors before running"
+        )
+
+    processors = LogitsProcessorList()
+    penalty = getattr(generation_config, "repetition_penalty", None)
+    if penalty is not None and float(penalty) != 1.0:
+        processors.append(RepetitionPenaltyLogitsProcessor(penalty=float(penalty)))
+    return processors
+
+
+def select_next_token(processors: Any, context_ids: Any, logits: Any) -> int:
+    """Greedy selection exactly as `generate` performs it.
+
+    `generate` casts the next-token logits to float32 before the processors run
+    and before argmax. Selecting in bfloat16 instead resolves near-ties
+    arbitrarily, so the cast is part of the decoding rule, not a detail.
+    """
+
+    import torch
+
+    scores = logits.reshape(1, -1).to(copy=True, dtype=torch.float32)
+    scores = processors(context_ids, scores)
+    return int(torch.argmax(scores, dim=-1)[0].item())
+
+
 def _stop_token_ids(model: Any, processor: Any) -> set[int]:
     values = getattr(model.generation_config, "eos_token_id", None)
     if values is None:
@@ -525,9 +608,15 @@ def manual_greedy_decode(
     *,
     cache: Any,
     prompt_attention_mask: Any,
+    prompt_input_ids: Any,
     first_token_id: int,
 ) -> dict[str, Any]:
-    """Decode y2 onward from a surgically edited prefill cache and fixed y1."""
+    """Decode y2 onward from a surgically edited prefill cache and fixed y1.
+
+    `prompt_input_ids` is required because the repetition penalty is defined over
+    the whole context `generate` would see, prompt included, not over the
+    generated suffix alone.
+    """
 
     import torch
 
@@ -535,6 +624,14 @@ def manual_greedy_decode(
     stop_ids = _stop_token_ids(model, processor)
     attention_mask = prompt_attention_mask.detach().clone()
     device = attention_mask.device
+    processors = greedy_logits_processors(model)
+    context_ids = torch.cat(
+        [
+            prompt_input_ids.detach().to(device=device, dtype=torch.long),
+            torch.tensor([[first_token_id]], dtype=torch.long, device=device),
+        ],
+        dim=1,
+    )
     current = torch.tensor([[first_token_id]], dtype=torch.long, device=device)
     with torch.inference_mode():
         for _ in range(cfg.exp4.max_new_tokens - 1):
@@ -559,9 +656,10 @@ def manual_greedy_decode(
                 return_dict=True,
             )
             cache = outputs.past_key_values
-            next_token = int(torch.argmax(outputs.logits[0, -1]).item())
+            next_token = select_next_token(processors, context_ids, outputs.logits[0, -1])
             token_ids.append(next_token)
             current = torch.tensor([[next_token]], dtype=torch.long, device=device)
+            context_ids = torch.cat([context_ids, current], dim=1)
     response = processor.batch_decode(
         [token_ids],
         skip_special_tokens=True,
@@ -684,7 +782,7 @@ def run_cache_routing(
         raise ValueError("Exp4 checkpoint contains duplicate pair/direction/condition rows")
 
     completed = 0
-    for pair_index, pair in assigned:
+    for shard_position, (pair_index, pair) in enumerate(assigned):
         pending_pair = any(
             (str(pair["pair_id"]), direction, condition) not in state
             for direction in cfg.exp4.directions
@@ -752,9 +850,15 @@ def run_cache_routing(
                 relay_positions=relay_positions,
                 clamp_layers=clamp_layers,
             )
-            fixed_y1 = int(injected_logits.argmax().item())
-            host_y1 = int(host_bundle.last_logits.argmax().item())
-            donor_y1 = int(donor_bundle.last_logits.argmax().item())
+            # y1 must be selected by the same rule `generate` uses, penalty and
+            # float32 cast included; a raw bfloat16 argmax is a different decoder.
+            processors = greedy_logits_processors(model)
+            prompt_ids = host["inputs"]["input_ids"]
+            fixed_y1 = select_next_token(processors, prompt_ids, injected_logits)
+            host_y1 = select_next_token(processors, prompt_ids, host_bundle.last_logits)
+            donor_y1 = select_next_token(
+                processors, donor["inputs"]["input_ids"], donor_bundle.last_logits
+            )
             first_margin = _margin(injected_logits, refusal_ids, nonrefusal_ids)
 
             clone_error = cache_max_abs_diff(clone_kv_cache(injected_cache), injected_cache)
@@ -775,8 +879,11 @@ def run_cache_routing(
                 )
             del fully_closed
 
+            # Counted within the shard, so every independently loaded model
+            # replica proves its own decoder against `generate`. With one shard
+            # this is exactly the pre-registered single-process assignment.
             check_standard = (
-                pair_index * len(cfg.exp4.directions) + direction_index
+                shard_position * len(cfg.exp4.directions) + direction_index
                 < cfg.exp4.standard_generate_checks
             )
             standard_result = None
@@ -814,14 +921,20 @@ def run_cache_routing(
                     processor,
                     cache=cell_cache,
                     prompt_attention_mask=host["inputs"]["attention_mask"],
+                    prompt_input_ids=host["inputs"]["input_ids"],
                     first_token_id=fixed_y1,
                 )
                 standard_exact = None
                 standard_margin_error = None
                 if check_standard and condition == "audio_injected__tab_injected":
                     assert standard_result is not None
-                    standard_exact = generated["response"] == standard_result["response"]
-                    standard_margin_error = abs(first_margin - standard_result["r_tab_margin"])
+                    # Token IDs, not decoded text: distinct token sequences can
+                    # decode to the same string once specials are stripped.
+                    standard_exact = (
+                        generated["generated_token_ids"] == standard_result["generated_token_ids"]
+                        and generated["response"] == standard_result["response"]
+                    )
+                    standard_margin_error = abs(first_margin - standard_result["r_tab_margin_raw"])
                     if not standard_exact or standard_margin_error > cfg.exp4.cache_atol:
                         raise RuntimeError(
                             "manual II decoding did not reproduce standard model.generate"
@@ -851,6 +964,8 @@ def run_cache_routing(
                     "transition": pair.get("transition"),
                     "selection_role": pair.get("selection_role"),
                     "contrast": cfg.exp4.contrast,
+                    "shard_index": shard_index,
+                    "shard_count": shard_count,
                     "direction": direction,
                     "condition": condition,
                     "condition_code": CONDITION_CODES[condition],
@@ -1251,7 +1366,10 @@ def analyze_cache_routing(cfg: Exp4RunConfig, run_dir: Path) -> dict[str, Any]:
         raise RuntimeError("Exp4 records do not exactly cover the frozen cohort factorial")
     hh_rows = [row for row in rows if row["condition"] == "audio_host__tab_host"]
     standard_rows = [row for row in rows if row.get("standard_generate_checked")]
-    expected_checks = min(cfg.exp4.standard_generate_checks, len(cohort) * len(cfg.exp4.directions))
+    shard_counts = {int(row.get("shard_count", 1)) for row in rows}
+    if len(shard_counts) != 1:
+        raise RuntimeError(f"Exp4 records disagree on shard_count: {sorted(shard_counts)}")
+    expected_checks = total_expected_standard_checks(cfg, cohort, shard_count=shard_counts.pop())
     integrity_ok = (
         all(bool(row.get("hook_counts_ok")) for row in rows)
         and all(float(row.get("cache_clone_max_abs_error", float("inf"))) == 0.0 for row in rows)

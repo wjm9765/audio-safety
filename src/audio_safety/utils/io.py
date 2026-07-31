@@ -1,7 +1,9 @@
 """Run artifact IO: JSON/JSONL helpers and reproducibility snapshots."""
 
 import json
+import os
 import subprocess
+import tempfile
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
@@ -11,8 +13,32 @@ from pydantic import BaseModel
 
 
 def save_json(obj: Any, path: Path) -> None:
+    """Write JSON via an atomic replace.
+
+    Concurrent workers sharing a run directory (e.g. sharded GPU runs writing
+    provenance.json) must never observe a half-written file.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(obj, indent=2, ensure_ascii=False, default=str) + "\n")
+    payload = json.dumps(obj, indent=2, ensure_ascii=False, default=str) + "\n"
+    temp_name: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temp_name = handle.name
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        Path(temp_name).replace(path)
+        temp_name = None
+    finally:
+        if temp_name is not None:
+            Path(temp_name).unlink(missing_ok=True)
 
 
 def load_json(path: Path) -> Any:

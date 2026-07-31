@@ -11,10 +11,12 @@ from audio_safety.pipelines.exp4_audio_kv_routing import (
     cache_max_abs_diff,
     clone_kv_cache,
     freeze_source_inputs,
+    greedy_logits_processors,
     manual_greedy_decode,
     merge_shard_records,
     shard_assignment,
     shard_records_path,
+    total_expected_standard_checks,
     transplant_cache_positions,
 )
 from audio_safety.utils.paths import ResolvedPaths
@@ -70,7 +72,7 @@ def test_manual_decode_conditions_on_fixed_first_token():
     )
 
     class Model:
-        generation_config = SimpleNamespace(eos_token_id=9)
+        generation_config = SimpleNamespace(eos_token_id=9, repetition_penalty=1.0)
 
         def __init__(self):
             self.calls = []
@@ -98,10 +100,70 @@ def test_manual_decode_conditions_on_fixed_first_token():
         Processor(),
         cache=object(),
         prompt_attention_mask=torch.ones((1, 5), dtype=torch.long),
+        prompt_input_ids=torch.zeros((1, 5), dtype=torch.long),
         first_token_id=1,
     )
     assert result["generated_token_ids"] == [1, 2, 9]
     assert model.calls == [([[1]], 6), ([[2]], 7)]
+
+
+def test_manual_decode_applies_the_generation_config_repetition_penalty():
+    """Qwen2-Audio ships repetition_penalty=1.1, so greedy generate is not argmax.
+
+    Exp3's whole frozen corpus came from `generate`, so a manual decoder that
+    skipped the penalty would silently be a different decoder.
+    """
+    torch = pytest.importorskip("torch")
+    pytest.importorskip("transformers")
+    cfg = load_exp4_config(
+        "configs/experiments/exp4_audio_kv_routing.yaml",
+        overrides=["exp4.max_new_tokens=2"],
+    )
+
+    class Model:
+        def __init__(self, penalty):
+            self.generation_config = SimpleNamespace(eos_token_id=99, repetition_penalty=penalty)
+
+        def __call__(self, *, input_ids, attention_mask, past_key_values, **kwargs):
+            del input_ids, attention_mask, kwargs
+            logits = torch.zeros((1, 1, 12))
+            # Token 7 already occurs in the prompt; token 3 does not. Without a
+            # penalty 7 wins; with 1.1 the penalty divides it below 3.
+            logits[0, 0, 7] = 2.0
+            logits[0, 0, 3] = 1.9
+            return SimpleNamespace(logits=logits, past_key_values=past_key_values)
+
+    class Processor:
+        tokenizer = SimpleNamespace(eos_token_id=99)
+
+        @staticmethod
+        def batch_decode(values, **kwargs):
+            del kwargs
+            return [" ".join(str(token) for token in values[0])]
+
+    prompt = torch.tensor([[7, 7, 5]], dtype=torch.long)
+    kwargs = {
+        "cache": object(),
+        "prompt_attention_mask": torch.ones((1, 3), dtype=torch.long),
+        "prompt_input_ids": prompt,
+        "first_token_id": 1,
+    }
+    unpenalised = manual_greedy_decode(cfg, Model(1.0), Processor(), **kwargs)
+    penalised = manual_greedy_decode(cfg, Model(1.1), Processor(), **kwargs)
+    assert unpenalised["generated_token_ids"] == [1, 7]
+    assert penalised["generated_token_ids"] == [1, 3]
+
+
+def test_greedy_logits_processors_rejects_unreplicated_generation_config():
+    pytest.importorskip("transformers")
+    model = SimpleNamespace(
+        generation_config=SimpleNamespace(repetition_penalty=1.1, no_repeat_ngram_size=3)
+    )
+    with pytest.raises(NotImplementedError, match="no_repeat_ngram_size"):
+        greedy_logits_processors(model)
+
+    plain = SimpleNamespace(generation_config=SimpleNamespace(repetition_penalty=1.0))
+    assert list(greedy_logits_processors(plain)) == []
 
 
 def test_pair_clustered_factorial_identifies_audio_not_tab():
@@ -187,18 +249,21 @@ def test_shard_assignment_partitions_cohort_and_keeps_global_indices():
         shard_assignment(cohort, shard_index=0, shard_count=0)
 
 
-def test_standard_generate_checks_are_shard_invariant(tmp_path):
+def test_every_shard_owes_its_own_standard_generate_checks(tmp_path):
+    """Each shard loads its own model replica, so each must prove its decoder."""
     cfg = _exp4_cfg()
     cohort = _shard_cohort(5)
     single = _expected_standard_checks(cfg, cohort, shard_index=0, shard_count=1)
     assert single == min(cfg.exp4.standard_generate_checks, len(cohort) * len(cfg.exp4.directions))
-    sharded = sum(
-        _expected_standard_checks(cfg, cohort, shard_index=index, shard_count=3)
-        for index in range(3)
-    )
-    assert sharded == single
-    # Global cell numbering keeps every pre-registered check inside shard 0.
-    assert _expected_standard_checks(cfg, cohort, shard_index=0, shard_count=3) == single
+
+    for index in range(3):
+        assert _expected_standard_checks(cfg, cohort, shard_index=index, shard_count=3) == single
+    assert total_expected_standard_checks(cfg, cohort, shard_count=3) == 3 * single
+    assert total_expected_standard_checks(cfg, cohort, shard_count=1) == single
+
+    # A shard too small to supply the full count owes only what it can run.
+    tiny = _shard_cohort(1)
+    assert _expected_standard_checks(cfg, tiny, shard_index=1, shard_count=2) == 0
 
 
 def test_shard_records_path_is_distinct_per_shard(tmp_path):
