@@ -6,11 +6,15 @@ import yaml
 
 from audio_safety.config import load_exp4_config
 from audio_safety.pipelines.exp4_audio_kv_routing import (
+    _expected_standard_checks,
     analyze_records,
     cache_max_abs_diff,
     clone_kv_cache,
     freeze_source_inputs,
     manual_greedy_decode,
+    merge_shard_records,
+    shard_assignment,
+    shard_records_path,
     transplant_cache_positions,
 )
 from audio_safety.utils.paths import ResolvedPaths
@@ -145,6 +149,127 @@ def test_pair_clustered_factorial_identifies_audio_not_tab():
     assert metrics["contrasts"]["D_tAB"]["decision"] == ("negligible_at_pilot_resolution")
     assert metrics["contrasts"]["D_joint"]["estimate"] == 1.0
     assert metrics["contrasts"]["factorial_interaction"]["estimate"] == 0.0
+
+
+def _exp4_cfg(*overrides):
+    return load_exp4_config(
+        "configs/experiments/exp4_audio_kv_routing.yaml", overrides=list(overrides)
+    )
+
+
+def _shard_cohort(n_pairs):
+    return [{"pair_id": f"phase:p{index}"} for index in range(n_pairs)]
+
+
+def _cells(cfg, cohort):
+    return [
+        {"pair_id": pair["pair_id"], "direction": direction, "condition": condition}
+        for pair in cohort
+        for direction in cfg.exp4.directions
+        for condition in cfg.exp4.conditions
+    ]
+
+
+def test_shard_assignment_partitions_cohort_and_keeps_global_indices():
+    cohort = _shard_cohort(7)
+    shards = [shard_assignment(cohort, shard_index=i, shard_count=3) for i in range(3)]
+
+    assert [index for shard in shards for index, _pair in shard] == [0, 3, 6, 1, 4, 2, 5]
+    covered = sorted(index for shard in shards for index, _pair in shard)
+    assert covered == list(range(len(cohort)))
+    for shard_index, shard in enumerate(shards):
+        assert all(index % 3 == shard_index for index, _pair in shard)
+    assert shard_assignment(cohort, shard_index=0, shard_count=1) == list(enumerate(cohort))
+
+    with pytest.raises(ValueError, match="shard_index must lie"):
+        shard_assignment(cohort, shard_index=3, shard_count=3)
+    with pytest.raises(ValueError, match="shard_count must be"):
+        shard_assignment(cohort, shard_index=0, shard_count=0)
+
+
+def test_standard_generate_checks_are_shard_invariant(tmp_path):
+    cfg = _exp4_cfg()
+    cohort = _shard_cohort(5)
+    single = _expected_standard_checks(cfg, cohort, shard_index=0, shard_count=1)
+    assert single == min(cfg.exp4.standard_generate_checks, len(cohort) * len(cfg.exp4.directions))
+    sharded = sum(
+        _expected_standard_checks(cfg, cohort, shard_index=index, shard_count=3)
+        for index in range(3)
+    )
+    assert sharded == single
+    # Global cell numbering keeps every pre-registered check inside shard 0.
+    assert _expected_standard_checks(cfg, cohort, shard_index=0, shard_count=3) == single
+
+
+def test_shard_records_path_is_distinct_per_shard(tmp_path):
+    cfg = _exp4_cfg()
+    canonical = tmp_path / cfg.exp4.artifacts.records_file
+    assert shard_records_path(cfg, tmp_path, shard_index=0, shard_count=1) == canonical
+    paths = [
+        shard_records_path(cfg, tmp_path, shard_index=index, shard_count=2) for index in range(2)
+    ]
+    assert len(set(paths)) == 2
+    assert canonical not in paths
+    assert paths[0].name == "records.shard00_of_02.jsonl"
+    assert paths[0].parent == canonical.parent
+
+
+def test_merge_shard_records_reconstructs_the_full_factorial(tmp_path):
+    cfg = _exp4_cfg()
+    cohort = _shard_cohort(5)
+    _write_jsonl(tmp_path / cfg.exp4.artifacts.cohort_file, cohort)
+    for shard_index in range(2):
+        owned = [
+            pair for _i, pair in shard_assignment(cohort, shard_index=shard_index, shard_count=2)
+        ]
+        _write_jsonl(
+            shard_records_path(cfg, tmp_path, shard_index=shard_index, shard_count=2),
+            _cells(cfg, owned),
+        )
+
+    rows = merge_shard_records(cfg, tmp_path, shard_count=2)
+    assert len(rows) == len(cohort) * len(cfg.exp4.directions) * len(cfg.exp4.conditions)
+    assert rows == sorted(
+        rows, key=lambda row: (row["pair_id"], row["direction"], row["condition"])
+    )
+    canonical = tmp_path / cfg.exp4.artifacts.records_file
+    assert json.loads(canonical.read_text().splitlines()[0])["pair_id"] == "phase:p0"
+    # Re-merging is idempotent.
+    assert merge_shard_records(cfg, tmp_path, shard_count=2) == rows
+
+
+def test_merge_shard_records_rejects_missing_incomplete_and_foreign_rows(tmp_path):
+    cfg = _exp4_cfg()
+    cohort = _shard_cohort(4)
+    _write_jsonl(tmp_path / cfg.exp4.artifacts.cohort_file, cohort)
+    shard0 = shard_records_path(cfg, tmp_path, shard_index=0, shard_count=2)
+    shard1 = shard_records_path(cfg, tmp_path, shard_index=1, shard_count=2)
+    own0 = [pair for _i, pair in shard_assignment(cohort, shard_index=0, shard_count=2)]
+    own1 = [pair for _i, pair in shard_assignment(cohort, shard_index=1, shard_count=2)]
+
+    _write_jsonl(shard0, _cells(cfg, own0))
+    with pytest.raises(FileNotFoundError, match="shard checkpoint is missing"):
+        merge_shard_records(cfg, tmp_path, shard_count=2)
+
+    # A shard that silently ran a pair it does not own must not be merged.
+    _write_jsonl(shard1, _cells(cfg, own1) + _cells(cfg, own0[:1]))
+    with pytest.raises(RuntimeError, match="outside its pair assignment"):
+        merge_shard_records(cfg, tmp_path, shard_count=2)
+
+    # A shard that stopped early must not produce a partial analysis.
+    _write_jsonl(shard1, _cells(cfg, own1)[:-1])
+    with pytest.raises(RuntimeError, match="do not cover the frozen cohort factorial"):
+        merge_shard_records(cfg, tmp_path, shard_count=2)
+
+    _write_jsonl(shard1, _cells(cfg, own1))
+    rows = merge_shard_records(cfg, tmp_path, shard_count=2)
+    assert len(rows) == 32
+
+    # A canonical checkpoint that disagrees with the shards is never overwritten.
+    _write_jsonl(shard1, list(reversed(_cells(cfg, own1))))
+    _write_jsonl(tmp_path / cfg.exp4.artifacts.records_file, rows[:-1])
+    with pytest.raises(RuntimeError, match="differ from the existing canonical"):
+        merge_shard_records(cfg, tmp_path, shard_count=2)
 
 
 def test_source_preflight_freezes_hashes_and_detects_mutation(tmp_path):

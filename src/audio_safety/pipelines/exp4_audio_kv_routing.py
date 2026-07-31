@@ -209,6 +209,139 @@ def freeze_source_inputs(
     return selected
 
 
+def _validate_shard(shard_index: int, shard_count: int) -> None:
+    if shard_count < 1:
+        raise ValueError("shard_count must be >= 1")
+    if not 0 <= shard_index < shard_count:
+        raise ValueError(f"shard_index must lie in [0, {shard_count}), got {shard_index}")
+
+
+def shard_records_path(
+    cfg: Exp4RunConfig,
+    run_dir: Path,
+    *,
+    shard_index: int,
+    shard_count: int,
+) -> Path:
+    """Per-shard checkpoint path; a single shard keeps the canonical file name."""
+
+    _validate_shard(shard_index, shard_count)
+    records = _relative_artifact(cfg.exp4.artifacts.records_file, label="records_file")
+    if shard_count == 1:
+        return run_dir / records
+    name = f"{records.stem}.shard{shard_index:02d}_of_{shard_count:02d}{records.suffix}"
+    return run_dir / records.with_name(name)
+
+
+def shard_assignment(
+    cohort: Sequence[Mapping[str, Any]],
+    *,
+    shard_index: int,
+    shard_count: int,
+) -> list[tuple[int, Mapping[str, Any]]]:
+    """Round-robin partition carrying each pair's global cohort index.
+
+    The global index is preserved so that shard-invariant decisions -- notably
+    which pair/direction cells receive the pre-registered standard-generate
+    equivalence check -- are identical to a single-process run.
+    """
+
+    _validate_shard(shard_index, shard_count)
+    return [
+        (index, pair) for index, pair in enumerate(cohort) if index % shard_count == shard_index
+    ]
+
+
+def _expected_standard_checks(
+    cfg: Exp4RunConfig,
+    cohort: Sequence[Mapping[str, Any]],
+    *,
+    shard_index: int,
+    shard_count: int,
+) -> int:
+    """Standard-generate checks owned by this shard under global cell numbering."""
+
+    n_directions = len(cfg.exp4.directions)
+    return sum(
+        1
+        for index, _pair in shard_assignment(
+            cohort, shard_index=shard_index, shard_count=shard_count
+        )
+        for direction_index in range(n_directions)
+        if index * n_directions + direction_index < cfg.exp4.standard_generate_checks
+    )
+
+
+def _factorial_keys(
+    cfg: Exp4RunConfig, pairs: Sequence[Mapping[str, Any]]
+) -> set[tuple[str, str, str]]:
+    return {
+        (str(pair["pair_id"]), direction, condition)
+        for pair in pairs
+        for direction in cfg.exp4.directions
+        for condition in cfg.exp4.conditions
+    }
+
+
+def merge_shard_records(
+    cfg: Exp4RunConfig,
+    run_dir: Path,
+    *,
+    shard_count: int,
+) -> list[dict[str, Any]]:
+    """Merge per-shard checkpoints into the canonical records file, fail closed.
+
+    Rejects a missing shard, a row written outside its shard's pair assignment,
+    a cell produced twice, and any deviation from the frozen cohort factorial.
+    Re-merging is idempotent but refuses to rewrite a differing canonical file.
+    """
+
+    _validate_shard(0, shard_count)
+    cohort_path = _artifact(run_dir, cfg.exp4.artifacts.cohort_file)
+    if not cohort_path.is_file():
+        raise FileNotFoundError("Exp4 frozen cohort is missing; run preflight first")
+    cohort = load_jsonl(cohort_path)
+
+    merged: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for shard_index in range(shard_count):
+        path = shard_records_path(cfg, run_dir, shard_index=shard_index, shard_count=shard_count)
+        if not path.is_file():
+            raise FileNotFoundError(f"Exp4 shard checkpoint is missing: {path}")
+        owned = {
+            str(pair["pair_id"])
+            for _index, pair in shard_assignment(
+                cohort, shard_index=shard_index, shard_count=shard_count
+            )
+        }
+        for row in load_jsonl(path):
+            key = (str(row["pair_id"]), str(row["direction"]), str(row["condition"]))
+            if key[0] not in owned:
+                raise RuntimeError(
+                    f"Exp4 shard {shard_index} wrote a row outside its pair assignment: {key}"
+                )
+            if key in merged:
+                raise RuntimeError(f"duplicate Exp4 cell across shards: {key}")
+            merged[key] = row
+
+    expected = _factorial_keys(cfg, cohort)
+    if set(merged) != expected:
+        missing = sorted(expected - set(merged))
+        extra = sorted(set(merged) - expected)
+        raise RuntimeError(
+            f"merged Exp4 shards do not cover the frozen cohort factorial: "
+            f"missing={missing[:5]}, extra={extra[:5]}"
+        )
+
+    rows = [merged[key] for key in sorted(merged)]
+    records_path = _artifact(run_dir, cfg.exp4.artifacts.records_file)
+    if records_path.is_file() and load_jsonl(records_path) != rows:
+        raise RuntimeError(
+            "merged Exp4 shards differ from the existing canonical records checkpoint"
+        )
+    atomic_save_jsonl(rows, records_path)
+    return rows
+
+
 def _cache_layers(cache: Any) -> list[Any]:
     layers = getattr(cache, "layers", None)
     if layers is None:
@@ -512,13 +645,24 @@ def run_cache_routing(
     run_dir: Path,
     model: Any,
     processor: Any,
+    *,
+    shard_index: int = 0,
+    shard_count: int = 1,
 ) -> list[dict[str, Any]]:
-    """Run the frozen pair x direction x 2x2 post-prefill intervention."""
+    """Run the frozen pair x direction x 2x2 post-prefill intervention.
 
+    Sharding only partitions which cohort pairs this process executes. Pairs are
+    causally independent, global cell numbering is preserved, and every shard
+    writes its own checkpoint, so a sharded run reproduces the single-process
+    records exactly once `merge_shard_records` has validated coverage.
+    """
+
+    _validate_shard(shard_index, shard_count)
     cohort_path = _artifact(run_dir, cfg.exp4.artifacts.cohort_file)
     if not cohort_path.is_file():
         raise FileNotFoundError("Exp4 cohort is not frozen; run preflight first")
     cohort = load_jsonl(cohort_path)
+    assigned = shard_assignment(cohort, shard_index=shard_index, shard_count=shard_count)
     source_dir = paths.output_dir / cfg.exp4.source_exp3_run
     frozen_behavior = _behavior_index(cfg, source_dir)
     refusal_ids, nonrefusal_ids = readout_token_ids(cfg, processor)
@@ -529,7 +673,9 @@ def run_cache_routing(
     if cfg.exp4.inject_layer >= n_layers or cfg.exp4.relay_start_layer >= n_layers:
         raise ValueError(f"Exp4 layers must lie inside the model's {n_layers} decoder blocks")
     clamp_layers = list(range(cfg.exp4.relay_start_layer, n_layers))
-    records_path = _artifact(run_dir, cfg.exp4.artifacts.records_file)
+    records_path = shard_records_path(
+        cfg, run_dir, shard_index=shard_index, shard_count=shard_count
+    )
     existing = load_jsonl(records_path) if records_path.is_file() else []
     state = {
         (str(row["pair_id"]), str(row["direction"]), str(row["condition"])): row for row in existing
@@ -538,7 +684,7 @@ def run_cache_routing(
         raise ValueError("Exp4 checkpoint contains duplicate pair/direction/condition rows")
 
     completed = 0
-    for pair_index, pair in enumerate(cohort):
+    for pair_index, pair in assigned:
         pending_pair = any(
             (str(pair["pair_id"]), direction, condition) not in state
             for direction in cfg.exp4.directions
@@ -752,16 +898,12 @@ def run_cache_routing(
                 )
                 del cell_cache
         print(
-            f"[exp4] pair {pair_index + 1}/{len(cohort)} completed_cells={completed}",
+            f"[exp4] shard {shard_index}/{shard_count} "
+            f"pair {pair_index + 1}/{len(cohort)} completed_cells={completed}",
             flush=True,
         )
 
-    expected = {
-        (str(pair["pair_id"]), direction, condition)
-        for pair in cohort
-        for direction in cfg.exp4.directions
-        for condition in cfg.exp4.conditions
-    }
+    expected = _factorial_keys(cfg, [pair for _index, pair in assigned])
     actual = set(state)
     if expected != actual:
         missing = sorted(expected - actual)
@@ -785,9 +927,12 @@ def run_cache_routing(
         if row.get("standard_generate_checked")
         and row["condition"] == "audio_injected__tab_injected"
     ]
-    if len(designated) != min(
-        cfg.exp4.standard_generate_checks, len(cohort) * len(cfg.exp4.directions)
-    ) or any(row.get("standard_generate_exact") is not True for row in designated):
+    expected_checks = _expected_standard_checks(
+        cfg, cohort, shard_index=shard_index, shard_count=shard_count
+    )
+    if len(designated) != expected_checks or any(
+        row.get("standard_generate_exact") is not True for row in designated
+    ):
         raise RuntimeError("Exp4 standard-generate equivalence gate is incomplete")
     return rows
 

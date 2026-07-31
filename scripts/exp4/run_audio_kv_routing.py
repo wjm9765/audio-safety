@@ -15,6 +15,7 @@ from audio_safety.pipelines.exp3_qwen_mechanism import refusal_matcher_sha
 from audio_safety.pipelines.exp4_audio_kv_routing import (
     analyze_cache_routing,
     freeze_source_inputs,
+    merge_shard_records,
     run_cache_routing,
 )
 from audio_safety.utils.io import (
@@ -26,7 +27,7 @@ from audio_safety.utils.io import (
 )
 from audio_safety.utils.paths import resolve_paths, run_output_dir
 
-STAGES = ("preflight", "run", "analyze", "all")
+STAGES = ("preflight", "run", "merge", "analyze", "all")
 
 
 def _parse_args() -> argparse.Namespace:
@@ -43,7 +44,39 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--stage", choices=STAGES, default="all")
     parser.add_argument("--override", action="append", default=[])
-    return parser.parse_args()
+    parser.add_argument(
+        "--shard-count",
+        type=int,
+        default=1,
+        help="number of concurrent worker processes covering the frozen cohort",
+    )
+    parser.add_argument(
+        "--shard-index",
+        type=int,
+        default=0,
+        help="0-based index of this worker; cohort pairs are assigned round-robin",
+    )
+    args = parser.parse_args()
+    if args.shard_count < 1:
+        parser.error("--shard-count must be >= 1")
+    if not 0 <= args.shard_index < args.shard_count:
+        parser.error("--shard-index must lie in [0, --shard-count)")
+    if args.shard_count > 1 and args.stage == "all":
+        parser.error(
+            "sharded execution must be staged explicitly: run 'preflight' once, then one "
+            "'run' per shard, then 'merge', then 'analyze'"
+        )
+    return args
+
+
+def _shard_errors_file(cfg, args) -> Path:
+    """Keep concurrent shards from overwriting each other's failure record."""
+    errors = Path(cfg.exp4.artifacts.errors_file)
+    if args.shard_count == 1:
+        return errors
+    return errors.with_name(
+        f"{errors.stem}.shard{args.shard_index:02d}_of_{args.shard_count:02d}{errors.suffix}"
+    )
 
 
 def _load_model(cfg, paths):
@@ -138,14 +171,28 @@ def main() -> None:
         else:
             save_json(provenance, provenance_path)
         try:
-            rows = run_cache_routing(cfg, paths, run_dir, model, processor)
-            print(f"[exp4] cache-routing cells={len(rows)}", flush=True)
+            rows = run_cache_routing(
+                cfg,
+                paths,
+                run_dir,
+                model,
+                processor,
+                shard_index=args.shard_index,
+                shard_count=args.shard_count,
+            )
+            print(
+                f"[exp4] shard {args.shard_index}/{args.shard_count} "
+                f"cache-routing cells={len(rows)}",
+                flush=True,
+            )
         except Exception as exc:
-            error_path = run_dir / cfg.exp4.artifacts.errors_file
+            error_path = run_dir / _shard_errors_file(cfg, args)
             errors = load_jsonl(error_path) if error_path.is_file() else []
             errors.append(
                 {
                     "stage": "run",
+                    "shard_index": args.shard_index,
+                    "shard_count": args.shard_count,
                     "error_type": type(exc).__name__,
                     "error": str(exc),
                 }
@@ -157,6 +204,10 @@ def main() -> None:
             import torch
 
             torch.cuda.empty_cache()
+
+    if args.stage == "merge":
+        rows = merge_shard_records(cfg, run_dir, shard_count=args.shard_count)
+        print(f"[exp4] merged shards={args.shard_count} cells={len(rows)}", flush=True)
 
     if args.stage in {"analyze", "all"}:
         metrics = analyze_cache_routing(cfg, run_dir)
