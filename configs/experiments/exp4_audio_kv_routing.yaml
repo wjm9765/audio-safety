@@ -1,0 +1,47 @@
+# Exp4 pre-registered follow-up to the frozen Exp3 phase-mechanism pilot.
+# Freeze before the first non-smoke GPU run. The referenced Exp3 config supplies
+# the exact model revision, prompt, refusal matcher, and source artifact layout.
+name: exp4_audio_kv_routing
+seed: 0
+source_exp3_config: configs/experiments/exp3_qwen_refusal_mechanism.yaml
+
+exp4:
+  enabled: true
+  schema_version: exp4.v1
+  source_exp3_run: exp3_20260729_1445_qwen_phase_mechanism
+  source_cohort_file: inputs/mechanism_cohort.jsonl
+  source_span_patch_file: span_patch/records.jsonl
+  source_relay_file: relay_closure/records.jsonl
+  contrast: phase
+
+  # Reproduce the Exp3 donor audio-span injection, while clamping all 15 relay
+  # positions to their host states after every later decoder block.
+  inject_layer: 10
+  relay_start_layer: 11
+  expected_relay_positions: 15
+  directions: [source_to_target, target_to_source]
+
+  # y1 is selected once from the injected prefill logits and held identical.
+  # Only the already-built prefill KV cache differs among these four cells.
+  conditions:
+    - audio_injected__tab_injected
+    - audio_host__tab_injected
+    - audio_injected__tab_host
+    - audio_host__tab_host
+
+  max_pairs: null
+  max_new_tokens: 96
+  n_bootstrap: 20000
+  ci_alpha: 0.05
+  material_effect_min: 0.20
+  negligible_effect_max: 0.10
+  standard_generate_checks: 2
+  cache_atol: 0.0
+
+  artifacts:
+    cohort_file: inputs/cohort.jsonl
+    source_manifest_file: inputs/source_manifest.json
+    records_file: cache_routing/records.jsonl
+    metrics_file: metrics.json
+    analysis_file: analysis.md
+    errors_file: errors.jsonl

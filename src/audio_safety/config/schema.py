@@ -931,6 +931,101 @@ class Exp3RunConfig(StrictModel):
     exp3: Exp3MechanismConfig
 
 
+class Exp4ArtifactsConfig(StrictModel):
+    """Frozen inputs and resumable outputs for the cache-routing experiment."""
+
+    cohort_file: Path = Path("inputs/cohort.jsonl")
+    source_manifest_file: Path = Path("inputs/source_manifest.json")
+    records_file: Path = Path("cache_routing/records.jsonl")
+    metrics_file: Path = Path("metrics.json")
+    analysis_file: Path = Path("analysis.md")
+    errors_file: Path = Path("errors.jsonl")
+
+
+class Exp4RoutingConfig(StrictModel):
+    """Post-prefill audio/t_AB KV-cache routing intervention."""
+
+    enabled: bool = True
+    schema_version: str = "exp4.v1"
+    source_exp3_run: str = Field(min_length=1)
+    source_cohort_file: Path = Path("inputs/mechanism_cohort.jsonl")
+    source_span_patch_file: Path = Path("span_patch/records.jsonl")
+    source_relay_file: Path = Path("relay_closure/records.jsonl")
+    contrast: str = "phase"
+    inject_layer: int = Field(default=10, ge=0)
+    relay_start_layer: int = Field(default=11, ge=1)
+    expected_relay_positions: int = Field(default=15, ge=1)
+    directions: list[Literal["source_to_target", "target_to_source"]] = Field(
+        default_factory=lambda: cast(
+            list[Literal["source_to_target", "target_to_source"]],
+            ["source_to_target", "target_to_source"],
+        ),
+        min_length=1,
+    )
+    conditions: list[
+        Literal[
+            "audio_injected__tab_injected",
+            "audio_host__tab_injected",
+            "audio_injected__tab_host",
+            "audio_host__tab_host",
+        ]
+    ] = Field(
+        default_factory=lambda: cast(
+            list[
+                Literal[
+                    "audio_injected__tab_injected",
+                    "audio_host__tab_injected",
+                    "audio_injected__tab_host",
+                    "audio_host__tab_host",
+                ]
+            ],
+            [
+                "audio_injected__tab_injected",
+                "audio_host__tab_injected",
+                "audio_injected__tab_host",
+                "audio_host__tab_host",
+            ],
+        ),
+        min_length=4,
+    )
+    max_pairs: int | None = Field(default=None, ge=1)
+    max_new_tokens: int = Field(default=96, ge=2)
+    n_bootstrap: int = Field(default=20_000, ge=100)
+    ci_alpha: float = Field(default=0.05, gt=0.0, lt=1.0)
+    material_effect_min: float = Field(default=0.20, ge=0.0, le=1.0)
+    negligible_effect_max: float = Field(default=0.10, ge=0.0, le=1.0)
+    standard_generate_checks: int = Field(default=2, ge=0)
+    cache_atol: float = Field(default=0.0, ge=0.0)
+    artifacts: Exp4ArtifactsConfig = Field(default_factory=Exp4ArtifactsConfig)
+
+    @model_validator(mode="after")
+    def _validate_routing_design(self) -> "Exp4RoutingConfig":
+        expected_conditions = {
+            "audio_injected__tab_injected",
+            "audio_host__tab_injected",
+            "audio_injected__tab_host",
+            "audio_host__tab_host",
+        }
+        if len(self.conditions) != len(set(self.conditions)):
+            raise ValueError("Exp4 conditions must be unique")
+        if set(self.conditions) != expected_conditions:
+            raise ValueError("Exp4 requires the complete frozen 2x2 condition set")
+        if len(self.directions) != len(set(self.directions)):
+            raise ValueError("Exp4 directions must be unique")
+        if self.relay_start_layer <= self.inject_layer:
+            raise ValueError("relay_start_layer must be later than inject_layer")
+        if self.negligible_effect_max >= self.material_effect_min:
+            raise ValueError("negligible_effect_max must be smaller than material_effect_min")
+        return self
+
+
+class Exp4RunConfig(Exp3RunConfig):
+    """Exp4 inherits Exp3's frozen model, prompt, endpoint, and pair schema."""
+
+    source_exp3_config: Path
+    exp4: Exp4RoutingConfig
+
+
 class ExperimentConfig(StrictModel):
     name: str
     seed: int = 0

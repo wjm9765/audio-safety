@@ -1,4 +1,4 @@
-from audio_safety.config.loader import load_exp3_config, load_experiment_config
+from audio_safety.config.loader import load_exp3_config, load_exp4_config, load_experiment_config
 from audio_safety.config.schema import (
     AsrConfig,
     AudioRdoConfig,
@@ -11,6 +11,7 @@ from audio_safety.config.schema import (
     DecisionConfig,
     DriftConfig,
     Exp3RunConfig,
+    Exp4RunConfig,
     ExperimentConfig,
     HiddenSiteConfig,
     ModelConfig,
@@ -37,6 +38,7 @@ __all__ = [
     "DecisionConfig",
     "DriftConfig",
     "Exp3RunConfig",
+    "Exp4RunConfig",
     "ExperimentConfig",
     "HiddenSiteConfig",
     "ModelConfig",
@@ -51,4 +53,5 @@ __all__ = [
     "TranscriptControlConfig",
     "load_experiment_config",
     "load_exp3_config",
+    "load_exp4_config",
 ]

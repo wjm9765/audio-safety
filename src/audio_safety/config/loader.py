@@ -19,7 +19,7 @@ from typing import Any
 
 import yaml
 
-from audio_safety.config.schema import Exp3RunConfig, ExperimentConfig
+from audio_safety.config.schema import Exp3RunConfig, Exp4RunConfig, ExperimentConfig
 from audio_safety.utils.env import load_project_dotenv
 
 # Top-level keys whose string value is treated as a path to another YAML file.
@@ -96,3 +96,30 @@ def load_exp3_config(
     """Load the narrow Exp3 schema without requiring unrelated Exp1 sections."""
 
     return Exp3RunConfig.model_validate(_load_raw_config(path, overrides))
+
+
+def load_exp4_config(
+    path: Path | str,
+    overrides: list[str] | None = None,
+) -> Exp4RunConfig:
+    """Compose Exp4 with its referenced, frozen Exp3 configuration.
+
+    Exp4 deliberately inherits the exact Exp3 model, prompt, refusal matcher,
+    pair schema, and artifact layout instead of copying them into a second YAML.
+    Dotted overrides are applied only after composition, so smoke runs can cap
+    Exp4 without silently changing how the source config was resolved.
+    """
+
+    load_project_dotenv()
+    path = Path(path)
+    overlay = load_yaml(path)
+    source_ref = overlay.get("source_exp3_config")
+    if not isinstance(source_ref, str) or not source_ref:
+        raise ValueError("Exp4 config requires a non-empty source_exp3_config path")
+    source_path = _resolve_ref(source_ref, path.parent)
+    raw = _load_raw_config(source_path)
+    raw.update({key: value for key, value in overlay.items() if key != "source_exp3_config"})
+    raw["source_exp3_config"] = source_ref
+    for spec in overrides or []:
+        _apply_override(raw, spec)
+    return Exp4RunConfig.model_validate(raw)
