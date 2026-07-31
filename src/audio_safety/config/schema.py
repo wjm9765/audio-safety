@@ -936,6 +936,7 @@ class Exp4ArtifactsConfig(StrictModel):
 
     cohort_file: Path = Path("inputs/cohort.jsonl")
     source_manifest_file: Path = Path("inputs/source_manifest.json")
+    endpoints_file: Path = Path("endpoints/physical.jsonl")
     records_file: Path = Path("cache_routing/records.jsonl")
     metrics_file: Path = Path("metrics.json")
     analysis_file: Path = Path("analysis.md")
@@ -996,6 +997,10 @@ class Exp4RoutingConfig(StrictModel):
     negligible_effect_max: float = Field(default=0.10, ge=0.0, le=1.0)
     standard_generate_checks: int = Field(default=2, ge=0)
     cache_atol: float = Field(default=0.0, ge=0.0)
+    # Physical H/D endpoints are measured on the device that runs the cells.
+    # "frozen" reuses the source Exp3 markers and is only valid when Exp4 runs
+    # on the hardware that produced them; see design.md §9 (2026-07-31).
+    endpoint_policy: Literal["current_hardware", "frozen"] = "current_hardware"
     artifacts: Exp4ArtifactsConfig = Field(default_factory=Exp4ArtifactsConfig)
 
     @model_validator(mode="after")

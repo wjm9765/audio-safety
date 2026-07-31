@@ -234,4 +234,88 @@ Official run:
 
 ## 9. Amendment log
 
-No amendments.
+### 2026-07-31 — resolved decoder contract, and hardware-local endpoints and gate 8
+
+Written **before any Exp4 estimand was computed**. The first real-weight smoke
+runs are archived as invalid and are not merged into any analysis. §0
+thresholds, §6 estimands, the endpoint definition, the cohort, and gates 1–7 and
+9 are unchanged.
+
+**1. The decoder contract is the resolved generation config, not raw argmax.**
+`Qwen2-Audio-7B-Instruct` ships `repetition_penalty: 1.1`, and Transformers
+5.12.1 casts next-token logits to float32 before applying generation-time logits
+processors and taking the argmax. Exp3's entire frozen behaviour corpus and
+every Exp3 intervention went through `model.generate`, i.e. through that
+decoder. Exp4's manual decoder performed an unprocessed bfloat16 argmax, so it
+was a different decoder. Teacher-forced against `generate` on a cohort pair, the
+two paths disagreed by 0.7–2.9 logits at every step and flipped one argmax in 30
+tokens where `generate`'s true top1–top2 gap was 0.148.
+
+For this experiment, "ordinary greedy `model.generate`" means `do_sample=False`
+under the frozen revision's fully resolved generation config, including every
+active logits processor. Manual decoding must reproduce the same float32
+processor-then-argmax ordering over the complete prompt-plus-generated context,
+and `y1` is selected by that same rule. Any active processor the manual decoder
+does not implement invalidates the run. Gate 7 now compares generated token IDs
+rather than decoded text, and is performed independently in every loaded model
+replica.
+
+This is a correction of Exp4's implementation to match §5 gate 7 as written; it
+does not change what §5 asked for. Exp3 remains internally consistent because
+all of its arms used the same `generate` path. The refusal/non-refusal readout
+token banks occur in 0 of 226 cohort prompts, so the repetition penalty never
+alters the readout margin and Exp3's continuous margins are unaffected.
+
+**2. Physical `H`/`D` endpoints are measured on the device that runs the cells.**
+The source Exp3 run executed on an NVIDIA RTX A5000; this run executes on an
+NVIDIA A40, with model revision, dtype, attention implementation, torch,
+transformers and CUDA identical. Greedy decoding is deterministic within a
+device — repeated identical calls reproduce bitwise — but is not guaranteed
+bitwise across devices, and the two GPUs differ in streaming-multiprocessor
+count, which changes matmul reduction order.
+
+Replaying Exp3's exact behaviour path on the A40 for both arms of all 113 pairs
+gives 147/226 identical texts (65.0%) and 220/226 identical refusal markers
+(97.3%). The six marker changes move five pairs out of discordance and one
+stable-control pair into it. Reusing the frozen markers would silently score
+this device's generations against labels that do not hold here.
+
+A new `endpoints` stage therefore regenerates both physical arms of every
+cohort pair on the current device, and `H`, `D` and `selection_role` are taken
+from those measurements (`exp4.endpoint_policy: current_hardware`). **No pair is
+added or dropped**: all 113 frozen pairs run, and only the measured role
+changes, so this is not an outcome-dependent selection. On this device the
+cohort is 69 discordant and 44 stable-control pairs, against 73/40 frozen. The
+frozen-versus-current transition table, per-arm marker and text agreement, and
+the frozen role and markers of every cell are recorded in `metrics.json` and in
+every record row.
+
+The six changes are not explained by a marginal first-token readout: their
+median |margin| is 3.313 against 2.190 for unchanged arms, and their ranks by
+closeness to a tie are spread across the cohort (35, 90, 106, 163, 178, 204 of
+226). This is consistent with the flip originating at a near-tie anywhere in the
+96-token trajectory rather than at the readout position.
+
+**3. Gate 8 is replaced by gate 8a, a hardware-local closure check.**
+As written, gate 8 compared `HH` against the source run's text, so on different
+hardware it tested cross-device floating-point portability of a 96-token
+trajectory rather than cache closure. Gate 6 passes at tolerance zero on real
+weights, which already establishes that the mixed cache equals the physical host
+cache exactly.
+
+> **8a.** Whenever the injected and current-device physical-host prefills choose
+> the same `y1`, the `HH` cell must reproduce, token-for-token including EOS and
+> length, an independently recomputed ordinary greedy `model.generate` on the
+> same physical-host prompt, in the same process, on the same model replica.
+> Tolerance is zero; the reference must not be derived from the manual or `HH`
+> cache. Any mismatch invalidates the run.
+
+Measured on 16 host cells before adoption: cache closure 0.0 on 16/16, `y1`
+agreement with `generate` 16/16, and `HH` equal to a fresh same-device
+`generate` on 16/16, while `HH` matched the frozen A5000 text on only 8/16.
+
+**Scope of this amendment.** This run is no longer a confirmatory execution of
+the original pre-registration on the hardware that produced its source labels.
+It is the same design, thresholds and estimands executed with hardware-local
+endpoints, and must be reported as such. A replication on the source A5000, or
+on a second GPU, remains the outstanding check on hardware invariance.

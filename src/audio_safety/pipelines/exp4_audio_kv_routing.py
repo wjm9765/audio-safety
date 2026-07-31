@@ -737,6 +737,144 @@ def _condition_cache(
     return result
 
 
+def _endpoint_role(source_refusal: bool, target_refusal: bool) -> str:
+    return "discordant" if bool(source_refusal) != bool(target_refusal) else "stable_control"
+
+
+def revalidate_physical_endpoints(
+    cfg: Exp4RunConfig,
+    paths: ResolvedPaths,
+    run_dir: Path,
+    model: Any,
+    processor: Any,
+) -> list[dict[str, Any]]:
+    """Regenerate both physical arms of every cohort pair on the current device.
+
+    The frozen Exp3 markers were measured on other hardware. Greedy decoding is
+    deterministic within a device but not across devices, so importing those
+    markers would score this device's generations against labels that may not
+    hold here. This stage re-measures `H` and `D` where the cells are actually
+    run and records the frozen-vs-current transition as a diagnostic.
+    """
+
+    cohort_path = _artifact(run_dir, cfg.exp4.artifacts.cohort_file)
+    if not cohort_path.is_file():
+        raise FileNotFoundError("Exp4 cohort is not frozen; run preflight first")
+    cohort = load_jsonl(cohort_path)
+    source_dir = paths.output_dir / cfg.exp4.source_exp3_run
+    frozen_behavior = _behavior_index(cfg, source_dir)
+    refusal_ids, nonrefusal_ids = readout_token_ids(cfg, processor)
+
+    endpoints_path = _artifact(run_dir, cfg.exp4.artifacts.endpoints_file)
+    existing = load_jsonl(endpoints_path) if endpoints_path.is_file() else []
+    state = {(str(row["pair_id"]), str(row["arm"])): row for row in existing}
+    if len(state) != len(existing):
+        raise ValueError("Exp4 endpoint checkpoint contains duplicate pair/arm rows")
+
+    completed = 0
+    for index, pair in enumerate(cohort):
+        keys = [(str(pair["pair_id"]), str(pair[f"{side}_arm"])) for side in ("source", "target")]
+        if all(key in state for key in keys):
+            continue
+        source, target = _prepare_aligned_pair(cfg, model, processor, pair)
+        for side, prepared in (("source", source), ("target", target)):
+            arm = str(pair[f"{side}_arm"])
+            generated = _generate_from_inputs(
+                cfg,
+                model,
+                processor,
+                prepared["inputs"],
+                refusal_ids,
+                nonrefusal_ids,
+                max_new_tokens=cfg.exp3.max_new_tokens,
+            )
+            frozen = frozen_behavior[(str(pair["item_id"]), arm)]
+            state[(str(pair["pair_id"]), arm)] = {
+                "schema_version": cfg.exp4.schema_version,
+                "stage": "physical_endpoints",
+                "pair_id": pair["pair_id"],
+                "item_id": pair["item_id"],
+                "arm": arm,
+                "side": side,
+                "frozen_selection_role": pair.get("selection_role"),
+                "response": generated["response"],
+                "explicit_refusal": bool(generated["explicit_refusal"]),
+                "r_tab_margin": generated["r_tab_margin"],
+                "r_tab_margin_raw": generated["r_tab_margin_raw"],
+                "generated_token_ids": generated["generated_token_ids"],
+                "frozen_response": frozen["response"],
+                "frozen_explicit_refusal": bool(frozen["explicit_refusal"]),
+                "marker_agrees_with_frozen": bool(generated["explicit_refusal"])
+                == bool(frozen["explicit_refusal"]),
+                "text_agrees_with_frozen": generated["response"] == frozen["response"],
+            }
+            completed += 1
+        _checkpoint_mapping(state, endpoints_path, completed_since_resume=completed, every=10)
+        print(
+            f"[exp4] endpoints pair {index + 1}/{len(cohort)} measured={completed}",
+            flush=True,
+        )
+
+    expected = {
+        (str(pair["pair_id"]), str(pair[f"{side}_arm"]))
+        for pair in cohort
+        for side in ("source", "target")
+    }
+    if set(state) != expected:
+        raise RuntimeError("Exp4 physical endpoints do not exactly cover the frozen cohort")
+    _checkpoint_mapping(state, endpoints_path, completed_since_resume=completed, force=True)
+    return [state[key] for key in sorted(state)]
+
+
+def endpoint_index(
+    cfg: Exp4RunConfig, run_dir: Path
+) -> tuple[dict[tuple[str, str], dict[str, Any]], dict[str, str]]:
+    """Load current-device endpoints and the roles they imply, per pair."""
+
+    endpoints_path = _artifact(run_dir, cfg.exp4.artifacts.endpoints_file)
+    if not endpoints_path.is_file():
+        raise FileNotFoundError(
+            "Exp4 physical endpoints are missing; run the 'endpoints' stage first"
+        )
+    rows = load_jsonl(endpoints_path)
+    index = {(str(row["pair_id"]), str(row["arm"])): row for row in rows}
+    if len(index) != len(rows):
+        raise ValueError("Exp4 endpoint records contain duplicate pair/arm rows")
+    sides: dict[str, dict[str, bool]] = defaultdict(dict)
+    for row in rows:
+        sides[str(row["pair_id"])][str(row["side"])] = bool(row["explicit_refusal"])
+    roles = {}
+    for pair_id, by_side in sides.items():
+        if set(by_side) != {"source", "target"}:
+            raise ValueError(f"Exp4 endpoints for {pair_id} do not cover both arms")
+        roles[pair_id] = _endpoint_role(by_side["source"], by_side["target"])
+    return index, roles
+
+
+def summarize_endpoints(cfg: Exp4RunConfig, run_dir: Path) -> dict[str, Any]:
+    """Frozen-vs-current endpoint transition table, recorded with every run."""
+
+    index, roles = endpoint_index(cfg, run_dir)
+    rows = list(index.values())
+    frozen_roles = {str(row["pair_id"]): str(row["frozen_selection_role"]) for row in rows}
+    transitions: dict[str, int] = defaultdict(int)
+    for pair_id, role in roles.items():
+        transitions[f"{frozen_roles[pair_id]}->{role}"] += 1
+    return {
+        "endpoint_policy": cfg.exp4.endpoint_policy,
+        "n_arms": len(rows),
+        "marker_agrees_with_frozen": sum(bool(row["marker_agrees_with_frozen"]) for row in rows),
+        "text_agrees_with_frozen": sum(bool(row["text_agrees_with_frozen"]) for row in rows),
+        "n_pairs": len(roles),
+        "current_discordant": sum(role == "discordant" for role in roles.values()),
+        "frozen_discordant": sum(role == "discordant" for role in frozen_roles.values()),
+        "role_transitions": dict(sorted(transitions.items())),
+        "changed_pairs": sorted(
+            pair_id for pair_id, role in roles.items() if role != frozen_roles[pair_id]
+        ),
+    }
+
+
 def run_cache_routing(
     cfg: Exp4RunConfig,
     paths: ResolvedPaths,
@@ -764,6 +902,10 @@ def run_cache_routing(
     source_dir = paths.output_dir / cfg.exp4.source_exp3_run
     frozen_behavior = _behavior_index(cfg, source_dir)
     refusal_ids, nonrefusal_ids = readout_token_ids(cfg, processor)
+    if cfg.exp4.endpoint_policy == "current_hardware":
+        endpoints, current_roles = endpoint_index(cfg, run_dir)
+    else:
+        endpoints, current_roles = {}, {}
 
     from audio_safety.models.hooks import get_decoder_layers
 
@@ -838,8 +980,15 @@ def run_cache_routing(
                 if direction == "source_to_target"
                 else str(pair["source_arm"])
             )
-            baseline = frozen_behavior[(str(pair["item_id"]), host_arm)]
-            donor_baseline = frozen_behavior[(str(pair["item_id"]), donor_arm)]
+            frozen_baseline = frozen_behavior[(str(pair["item_id"]), host_arm)]
+            frozen_donor = frozen_behavior[(str(pair["item_id"]), donor_arm)]
+            if cfg.exp4.endpoint_policy == "current_hardware":
+                baseline = endpoints[(str(pair["pair_id"]), host_arm)]
+                donor_baseline = endpoints[(str(pair["pair_id"]), donor_arm)]
+                selection_role = current_roles[str(pair["pair_id"])]
+            else:
+                baseline, donor_baseline = frozen_baseline, frozen_donor
+                selection_role = str(pair.get("selection_role"))
 
             injected_cache, injected_logits, hook_counts = _injected_prefill(
                 cfg,
@@ -940,16 +1089,24 @@ def run_cache_routing(
                             "manual II decoding did not reproduce standard model.generate"
                         )
 
+                # Gate 8a (design.md §9, 2026-07-31): the reference is an
+                # independently recomputed physical-host generation on THIS
+                # replica, not the source run's text. Comparing across devices
+                # tests floating-point portability, not cache closure.
                 host_reproduction_exact = None
                 if (
                     condition == "audio_host__tab_host"
                     and fixed_y1 == host_y1
                     and cfg.exp4.max_new_tokens == cfg.exp3.max_new_tokens
                 ):
-                    host_reproduction_exact = generated["response"] == baseline["response"]
+                    host_reproduction_exact = (
+                        generated["generated_token_ids"] == baseline["generated_token_ids"]
+                        and generated["response"] == baseline["response"]
+                    )
                     if not host_reproduction_exact:
                         raise RuntimeError(
-                            "HH cache with unchanged y1 did not reproduce frozen host generation"
+                            "HH cache with unchanged y1 did not reproduce the current-device "
+                            f"physical host generation for {pair['pair_id']} {direction}"
                         )
 
                 audio_source, tab_source = CONDITION_SOURCES[condition]
@@ -962,7 +1119,11 @@ def run_cache_routing(
                     "role": pair["role"],
                     "category_name": pair.get("category_name"),
                     "transition": pair.get("transition"),
-                    "selection_role": pair.get("selection_role"),
+                    "selection_role": selection_role,
+                    "frozen_selection_role": pair.get("selection_role"),
+                    "endpoint_policy": cfg.exp4.endpoint_policy,
+                    "frozen_baseline_explicit_refusal": bool(frozen_baseline["explicit_refusal"]),
+                    "frozen_donor_explicit_refusal": bool(frozen_donor["explicit_refusal"]),
                     "contrast": cfg.exp4.contrast,
                     "shard_index": shard_index,
                     "shard_count": shard_count,
@@ -1388,6 +1549,8 @@ def analyze_cache_routing(cfg: Exp4RunConfig, run_dir: Path) -> dict[str, Any]:
     if not integrity_ok:
         raise RuntimeError("Exp4 record integrity gates do not pass; analysis is invalid")
     metrics = analyze_records(cfg, rows)
+    if cfg.exp4.endpoint_policy == "current_hardware":
+        metrics["physical_endpoints"] = summarize_endpoints(cfg, run_dir)
     save_json(metrics, _artifact(run_dir, cfg.exp4.artifacts.metrics_file))
     analysis_path = _artifact(run_dir, cfg.exp4.artifacts.analysis_file)
     analysis_path.parent.mkdir(parents=True, exist_ok=True)

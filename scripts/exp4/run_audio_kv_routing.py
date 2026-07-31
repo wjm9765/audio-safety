@@ -16,7 +16,9 @@ from audio_safety.pipelines.exp4_audio_kv_routing import (
     analyze_cache_routing,
     freeze_source_inputs,
     merge_shard_records,
+    revalidate_physical_endpoints,
     run_cache_routing,
+    summarize_endpoints,
 )
 from audio_safety.utils.io import (
     get_git_commit,
@@ -27,7 +29,7 @@ from audio_safety.utils.io import (
 )
 from audio_safety.utils.paths import resolve_paths, run_output_dir
 
-STAGES = ("preflight", "run", "merge", "analyze", "all")
+STAGES = ("preflight", "endpoints", "run", "merge", "analyze", "all")
 
 
 def _parse_args() -> argparse.Namespace:
@@ -154,7 +156,7 @@ def main() -> None:
     paths = resolve_paths(cfg.paths)
     run_dir = run_output_dir(paths.output_dir, args.run_name)
 
-    will_run_gpu = args.stage in {"run", "all"}
+    will_run_gpu = args.stage in {"endpoints", "run", "all"}
     if will_run_gpu:
         dirty = get_git_dirty()
         if dirty is not False:
@@ -187,26 +189,40 @@ def main() -> None:
         else:
             save_json(provenance, provenance_path)
         try:
-            rows = run_cache_routing(
-                cfg,
-                paths,
-                run_dir,
-                model,
-                processor,
-                shard_index=args.shard_index,
-                shard_count=args.shard_count,
-            )
-            print(
-                f"[exp4] shard {args.shard_index}/{args.shard_count} "
-                f"cache-routing cells={len(rows)}",
-                flush=True,
-            )
+            if args.stage in {"endpoints", "all"} and (
+                cfg.exp4.endpoint_policy == "current_hardware"
+            ):
+                endpoints = revalidate_physical_endpoints(cfg, paths, run_dir, model, processor)
+                summary = summarize_endpoints(cfg, run_dir)
+                print(
+                    f"[exp4] endpoints arms={len(endpoints)} "
+                    f"marker_agrees={summary['marker_agrees_with_frozen']}/{summary['n_arms']} "
+                    f"text_agrees={summary['text_agrees_with_frozen']}/{summary['n_arms']} "
+                    f"discordant {summary['frozen_discordant']}->{summary['current_discordant']} "
+                    f"transitions={summary['role_transitions']}",
+                    flush=True,
+                )
+            if args.stage in {"run", "all"}:
+                rows = run_cache_routing(
+                    cfg,
+                    paths,
+                    run_dir,
+                    model,
+                    processor,
+                    shard_index=args.shard_index,
+                    shard_count=args.shard_count,
+                )
+                print(
+                    f"[exp4] shard {args.shard_index}/{args.shard_count} "
+                    f"cache-routing cells={len(rows)}",
+                    flush=True,
+                )
         except Exception as exc:
             error_path = run_dir / _shard_errors_file(cfg, args)
             errors = load_jsonl(error_path) if error_path.is_file() else []
             errors.append(
                 {
-                    "stage": "run",
+                    "stage": args.stage,
                     "shard_index": args.shard_index,
                     "shard_count": args.shard_count,
                     "error_type": type(exc).__name__,
