@@ -938,3 +938,144 @@ class MultiLayerAdditiveSteering:
     def applied_counts(self) -> dict[int, int]:
         """Forward-pass application count per layer (prefill + each decode step)."""
         return dict(self._applied_counts)
+
+
+class AttentionInputCapture:
+    """Capture the post-layernorm states each decoder layer feeds to attention.
+
+    These are the states from which K and V are computed, so replaying them into
+    another run reproduces exactly what a query would have attended to. Distinct
+    from :class:`AudioSpanCapture`, which records decoder-layer *outputs*.
+    """
+
+    def __init__(self, model: Any, *, layers: Iterable[int], positions: Iterable[int]):
+        positions = sorted({int(position) for position in positions})
+        if not positions or positions[0] < 0:
+            raise ValueError("positions must contain non-negative absolute indices")
+        self._layers = _select_layers(get_decoder_layers(model), layers)
+        if not self._layers:
+            raise ValueError("layers must be non-empty")
+        self._positions = positions
+        self._handles: list[Any] = []
+        self._states: dict[int, Any] = {}
+
+    def _hook(self, layer_idx: int):
+        def hook(module: Any, args: Any, kwargs: Any) -> None:
+            import torch
+
+            hidden = kwargs.get("hidden_states") if kwargs else None
+            if hidden is None and args:
+                hidden = args[0]
+            if hidden is None:
+                raise RuntimeError("attention module received no hidden_states")
+            if layer_idx in self._states:
+                raise RuntimeError("AttentionInputCapture hook fired more than once")
+            if hidden.ndim != 3 or hidden.shape[0] != 1:
+                raise ValueError("AttentionInputCapture requires hidden shape (1, tokens, dim)")
+            if self._positions[-1] >= hidden.shape[1]:
+                raise ValueError(f"position {self._positions[-1]} exceeds length {hidden.shape[1]}")
+            idx = torch.as_tensor(self._positions, dtype=torch.long, device=hidden.device)
+            self._states[layer_idx] = hidden[0].index_select(0, idx).detach().clone()
+
+        return hook
+
+    def __enter__(self) -> "AttentionInputCapture":
+        self._states = {}
+        self._handles = [
+            layer.self_attn.register_forward_pre_hook(self._hook(layer_idx), with_kwargs=True)
+            for layer_idx, layer in self._layers
+        ]
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        for handle in self._handles:
+            handle.remove()
+        self._handles = []
+
+    def states(self) -> dict[int, Any]:
+        if len(self._states) != len(self._layers):
+            raise RuntimeError(f"captured {len(self._states)}/{len(self._layers)} attention inputs")
+        return dict(self._states)
+
+
+class AudioEdgeIntervention:
+    """Cut only the audio -> target-position attention edge, at one layer.
+
+    Runs the wrapped attention module twice on the same prefill: once
+    unmodified, and once with the attention-input states at ``source_positions``
+    replaced by ``replacement``. Only the ``target_position`` row of the second
+    output is kept.
+
+    Because a query at ``target_position`` is computed from its own unmodified
+    hidden state, that row is exactly "this position attends to replacement K/V
+    at the source positions, and to unmodified K/V everywhere else". Every other
+    position, the residual stream, and the MLPs are untouched, and the KV cache
+    written for later decoding comes from the unmodified call.
+
+    Prefill only: the second call is made with ``past_key_values=None`` so it
+    cannot append to or read from the cache.
+    """
+
+    def __init__(
+        self,
+        model: Any,
+        *,
+        layer_idx: int,
+        source_positions: Iterable[int],
+        target_position: int,
+        replacement: Any,
+    ):
+        positions = sorted({int(position) for position in source_positions})
+        if not positions or positions[0] < 0:
+            raise ValueError("source_positions must be non-negative absolute indices")
+        if int(target_position) <= positions[-1]:
+            raise ValueError("target_position must lie after the source span")
+        selected = _select_layers(get_decoder_layers(model), [layer_idx])
+        if not selected:
+            raise ValueError(f"layer {layer_idx} is out of range")
+        self._module = selected[0][1].self_attn
+        self._positions = positions
+        self._target = int(target_position)
+        self._replacement = replacement
+        self._original: Any = None
+        self.applied_count = 0
+
+    def __enter__(self) -> "AudioEdgeIntervention":
+        import torch
+
+        self.applied_count = 0
+        module = self._module
+        self._original = module.forward
+        positions = self._positions
+        target = self._target
+        replacement = self._replacement
+        outer = self
+
+        def patched(hidden_states, *args, **kwargs):
+            if hidden_states.ndim != 3 or hidden_states.shape[0] != 1:
+                raise ValueError("AudioEdgeIntervention requires shape (1, tokens, dim)")
+            if target >= hidden_states.shape[1] or positions[-1] >= hidden_states.shape[1]:
+                raise ValueError("intervention positions exceed the prefill length")
+            attn_output, weights = outer._original(hidden_states, *args, **kwargs)
+
+            index = torch.as_tensor(positions, dtype=torch.long, device=hidden_states.device)
+            edited = hidden_states.clone()
+            edited[0].index_copy_(
+                0, index, replacement.to(device=hidden_states.device, dtype=hidden_states.dtype)
+            )
+            side_kwargs = dict(kwargs)
+            side_kwargs["past_key_values"] = None
+            side_output, _ = outer._original(edited, *args, **side_kwargs)
+
+            patched_output = attn_output.clone()
+            patched_output[:, target, :] = side_output[:, target, :]
+            outer.applied_count += 1
+            return patched_output, weights
+
+        module.forward = patched
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        if self._original is not None:
+            self._module.forward = self._original
+            self._original = None
